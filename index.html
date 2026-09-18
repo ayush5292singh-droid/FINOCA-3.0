@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#080d1c" />
+  <title>FINANCE MANAGER</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-logo">₣</div>
+        <div>
+          <h1>FINANCE<span>MANAGER</span></h1>
+          <small>SMART MONEY OS</small>
+        </div>
+      </div>
+
+      <button class="mobile-close" onclick="toggleSidebar()">×</button>
+
+      <nav>
+        <button class="nav-btn active" data-page="dashboard">⌂ <span>Dashboard</span></button>
+        <button class="nav-btn" data-page="transactions">⇄ <span>Transactions</span></button>
+        <button class="nav-btn" data-page="wallets">▣ <span>Wallets</span></button>
+        <button class="nav-btn" data-page="budgets">◫ <span>Budgets</span></button>
+        <button class="nav-btn" data-page="goals">◎ <span>Savings Goals</span></button>
+        <button class="nav-btn" data-page="recurring">↻ <span>Recurring</span></button>
+        <button class="nav-btn" data-page="receipts">▤ <span>Receipt Scanner</span></button>
+        <button class="nav-btn" data-page="analytics">◈ <span>Analytics</span></button>
+        <button class="nav-btn" data-page="reports">▥ <span>Reports</span></button>
+
+        <!-- NEW -->
+        <button class="nav-btn" data-page="loans">💳 <span>Loans & EMI</span></button>
+        <button class="nav-btn" data-page="pro">✦ <span>Finance Pro</span></button>
+
+        <button class="nav-btn" data-page="backup">⬡ <span>Backup & Restore</span></button>
+        <button class="nav-btn" data-page="settings">⚙ <span>Settings</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="premium-mini">
+          <strong>FINANCE PRO</strong>
+          <p>Unlock advanced money tools.</p>
+          <button onclick="showPremium()">Upgrade ₹99/month</button>
+        </div>
+
+        <div class="storage-status">
+          ● Offline storage active
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+
+      <header class="topbar">
+        <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+
+        <div>
+          <div class="eyebrow">PERSONAL FINANCIAL COMMAND CENTER</div>
+          <h2 id="page-title">Dashboard</h2>
+        </div>
+
+        <div class="top-actions">
+          <button class="icon-btn" onclick="toggleTheme()" title="Change theme">◐</button>
+          <button class="primary-btn" onclick="openTransactionModal()">+ Add transaction</button>
+        </div>
+      </header>
+
+      <div id="app-content"></div>
+
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop" onclick="closeModal(event)">
+    <div class="modal" id="modal-box" onclick="event.stopPropagation()"></div>
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
