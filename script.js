@@ -1,354 +1,169 @@
+
 "use strict";
 
-/* =========================================================
-   FINANCE MANAGER - MAXIMUM OFFLINE EDITION
-   LOANS + EMI + FINANCE PRO
-   ========================================================= */
+/* ==========================================================
+   FINOVA — SMART MONEY OS
+   Browser-based personal finance tracker
+   ========================================================== */
 
-const STORAGE_KEY = "finance_manager_maximum_v2";
+const $ = (id) => document.getElementById(id);
+const STORE = "finova_smart_money_os_v1";
 
-const defaultData = {
-  profile: {
-    name: "My Finance",
-    currency: "INR",
-    theme: "dark"
-  },
+const money = (n) => new Intl.NumberFormat("en-IN", {
+  style: "currency", currency: "INR", maximumFractionDigits: 2
+}).format(Number(n) || 0);
 
-  wallets: [
-    {
-      id: "wallet-main",
-      name: "Main Wallet",
-      type: "Cash",
-      opening: 0
-    }
-  ],
+const number = (n) => Math.max(0, Number(n) || 0);
+const today = () => new Date().toISOString().slice(0, 10);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({
+  "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+}[c]));
 
+const defaults = () => ({
+  profile: null,
+  policyAccepted: false,
+  pro: false,
   transactions: [],
+  wallets: [{ id: "main", name: "Main Wallet", type: "Cash", opening: 0, frozen: false, theme: "card-dark" }],
   budgets: [],
   goals: [],
-  recurring: [],
   loans: [],
-
-  settings: {
-    monthlyIncomeTarget: 0,
-    notifications: true
-  },
-
-  pro: {
-    active: false
-  }
-};
+  recurring: [],
+  receipts: [],
+  settings: { currency: "INR", theme: "dark" }
+});
 
 let data = loadData();
 let currentPage = "dashboard";
-
-let expenseChart = null;
-let trendChart = null;
-let categoryChart = null;
-let receiptImage = "";
-
-const categories = [
-  "Food",
-  "Transport",
-  "Shopping",
-  "Bills",
-  "Entertainment",
-  "Health",
-  "Education",
-  "Rent",
-  "Salary",
-  "Investment",
-  "Travel",
-  "Other"
-];
-
-const icons = {
-  Food: "🍔",
-  Transport: "🚗",
-  Shopping: "🛍️",
-  Bills: "🧾",
-  Entertainment: "🎮",
-  Health: "💊",
-  Education: "📚",
-  Rent: "🏠",
-  Salary: "💼",
-  Investment: "📈",
-  Travel: "✈️",
-  Other: "◈"
-};
-
-const currencySymbols = {
-  INR: "₹",
-  USD: "$",
-  EUR: "€",
-  GBP: "£",
-  AED: "د.إ"
-};
-
-/* =========================================================
-   DATA
-   ========================================================= */
+let toastTimer;
+let genericConfig = null;
+let receiptImageURL = null;
 
 function loadData() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-
-    if (!saved) {
-      return structuredClone(defaultData);
-    }
-
-    const parsed = JSON.parse(saved);
-
+    const raw = localStorage.getItem(STORE);
+    if (!raw) return defaults();
+    const saved = JSON.parse(raw);
+    const base = defaults();
     return {
-      ...structuredClone(defaultData),
-      ...parsed,
-
-      profile: {
-        ...defaultData.profile,
-        ...(parsed.profile || {})
-      },
-
-      settings: {
-        ...defaultData.settings,
-        ...(parsed.settings || {})
-      },
-
-      pro: {
-        ...defaultData.pro,
-        ...(parsed.pro || {})
-      },
-
-      wallets: parsed.wallets || [],
-      transactions: parsed.transactions || [],
-      budgets: parsed.budgets || [],
-      goals: parsed.goals || [],
-      recurring: parsed.recurring || [],
-      loans: parsed.loans || []
+      ...base, ...saved,
+      profile: saved.profile || null,
+      transactions: Array.isArray(saved.transactions) ? saved.transactions : [],
+      wallets: Array.isArray(saved.wallets) && saved.wallets.length ? saved.wallets : base.wallets,
+      budgets: Array.isArray(saved.budgets) ? saved.budgets : [],
+      goals: Array.isArray(saved.goals) ? saved.goals : [],
+      loans: Array.isArray(saved.loans) ? saved.loans : [],
+      recurring: Array.isArray(saved.recurring) ? saved.recurring : [],
+      receipts: Array.isArray(saved.receipts) ? saved.receipts : []
     };
   } catch {
-    return structuredClone(defaultData);
+    return defaults();
   }
 }
 
 function saveData() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-}
-
-function uid(prefix = "id") {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-}
-
-function money(value) {
-  const symbol = currencySymbols[data.profile.currency] || "₹";
-
-  return symbol + Number(value || 0).toLocaleString("en-IN", {
-    maximumFractionDigits: 2
-  });
-}
-
-function numberValue(value) {
-  return Number(value || 0);
-}
-
-function today() {
-  return new Date().toISOString().slice(0,10);
-}
-
-function monthKey(date = today()) {
-  return date.slice(0,7);
-}
-
-function escapeHTML(value) {
-  return String(value ?? "")
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
-}
-
-/* =========================================================
-   UI
-   ========================================================= */
-
-function showToast(message,type="success") {
-  const container = document.getElementById("toast-container");
-  const toast = document.createElement("div");
-
-  toast.className = `toast ${type}`;
-  toast.textContent = message;
-
-  container.appendChild(toast);
-
-  setTimeout(() => toast.remove(),3200);
-}
-
-function openModal(html) {
-  document.getElementById("modal-box").innerHTML = html;
-  document.getElementById("modal-backdrop").classList.add("open");
-}
-
-function closeModal(event) {
-  if (!event || event.target.id === "modal-backdrop") {
-    document.getElementById("modal-backdrop").classList.remove("open");
-    receiptImage = "";
+  try {
+    localStorage.setItem(STORE, JSON.stringify(data));
+    updateProfile();
+  } catch {
+    notify("Storage is full. Export your backup and remove some data.");
   }
 }
 
-function closeModalDirect() {
-  document.getElementById("modal-backdrop").classList.remove("open");
-  receiptImage = "";
+function notify(message) {
+  const el = $("toast");
+  el.textContent = message;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 3000);
 }
 
-function toggleSidebar() {
-  document.getElementById("sidebar").classList.toggle("open");
+function updateProfile() {
+  const name = data.profile?.name || "Your profile";
+  $("sidebarName").textContent = name;
+  $("sidebarAvatar").textContent = name.charAt(0).toUpperCase();
+  $("topAvatar").textContent = name.charAt(0).toUpperCase();
+  $("planLabel").textContent = data.pro ? "PRO PLAN" : "FREE PLAN";
 }
 
-function toggleTheme() {
-  data.profile.theme =
-    data.profile.theme === "dark" ? "light" : "dark";
-
-  document.documentElement.setAttribute(
-    "data-theme",
-    data.profile.theme
-  );
-
-  saveData();
-  render();
-}
-
-function setupNavigation() {
-  document.querySelectorAll(".nav-btn").forEach(button => {
-    button.addEventListener("click",() => {
-      currentPage = button.dataset.page;
-
-      document.querySelectorAll(".nav-btn").forEach(item => {
-        item.classList.toggle("active",item === button);
-      });
-
-      document.getElementById("sidebar").classList.remove("open");
-
-      render();
-    });
-  });
-}
-
-function navigateTo(page) {
-  currentPage = page;
-
-  document.querySelectorAll(".nav-btn").forEach(button => {
-    button.classList.toggle(
-      "active",
-      button.dataset.page === page
-    );
-  });
-
-  render();
-}
-
-/* =========================================================
-   TOTALS
-   ========================================================= */
-
-function totals() {
-  let income = 0;
-  let expenses = 0;
-
-  data.transactions.forEach(transaction => {
-    if (transaction.type === "income") {
-      income += numberValue(transaction.amount);
-    }
-
-    if (transaction.type === "expense") {
-      expenses += numberValue(transaction.amount);
-    }
-  });
-
-  const opening = data.wallets.reduce(
-    (sum,wallet) => sum + numberValue(wallet.opening),
-    0
-  );
-
-  return {
-    income,
-    expenses,
-    opening,
-    balance: opening + income - expenses,
-    net: income - expenses
-  };
+function sum(items, fn) {
+  return items.reduce((total, item) => total + (Number(fn(item)) || 0), 0);
 }
 
 function walletBalance(walletId) {
-  const wallet = data.wallets.find(item => item.id === walletId);
-
+  const wallet = data.wallets.find(w => w.id === walletId);
   if (!wallet) return 0;
+  return number(wallet.opening) + sum(
+    data.transactions.filter(t => t.walletId === walletId),
+    t => t.type === "income" ? t.amount : -t.amount
+  );
+}
 
-  let result = numberValue(wallet.opening);
+function totals() {
+  const income = sum(data.transactions.filter(t => t.type === "income"), t => t.amount);
+  const expenses = sum(data.transactions.filter(t => t.type === "expense"), t => t.amount);
+  const walletTotal = sum(data.wallets, w => walletBalance(w.id));
+  const savedGoals = sum(data.goals, g => g.saved);
+  const debt = sum(data.loans, l => Math.max(0, l.principal - l.paid));
+  return { income, expenses, walletTotal, savedGoals, debt };
+}
 
-  data.transactions.forEach(transaction => {
-    if (transaction.walletId !== walletId) return;
+function monthTransactions() {
+  const month = today().slice(0, 7);
+  return data.transactions.filter(t => String(t.date).startsWith(month));
+}
 
-    if (transaction.type === "income") {
-      result += numberValue(transaction.amount);
-    }
+function monthTotals() {
+  const tx = monthTransactions();
+  return {
+    income: sum(tx.filter(t => t.type === "income"), t => t.amount),
+    expenses: sum(tx.filter(t => t.type === "expense"), t => t.amount)
+  };
+}
 
-    if (transaction.type === "expense") {
-      result -= numberValue(transaction.amount);
-    }
+function walletOptions(selected) {
+  if (!data.wallets.length) return '<option value="">No wallets available</option>';
+  return data.wallets.map(w =>
+    `<option value="${esc(w.id)}" ${w.id === selected ? "selected" : ""}>${esc(w.name)}</option>`
+  ).join("");
+}
+
+function setPage(page) {
+  const allowed = [
+    "dashboard", "transactions", "wallets", "budgets", "goals",
+    "loans", "recurring", "receipts", "analytics", "reports", "pro", "settings"
+  ];
+  if (!allowed.includes(page)) return;
+  currentPage = page;
+
+  document.querySelectorAll("[data-page]").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.page === page);
   });
 
-  return result;
-}
-
-function monthlyTransactions(month = monthKey()) {
-  return data.transactions.filter(item =>
-    item.date.startsWith(month)
-  );
-}
-
-function monthlyTotals(month = monthKey()) {
-  const transactions = monthlyTransactions(month);
-
-  return {
-    income: transactions
-      .filter(item => item.type === "income")
-      .reduce((sum,item) => sum + numberValue(item.amount),0),
-
-    expenses: transactions
-      .filter(item => item.type === "expense")
-      .reduce((sum,item) => sum + numberValue(item.amount),0)
-  };
-}
-
-/* =========================================================
-   RENDER ENGINE
-   ========================================================= */
-
-function render() {
-  document.documentElement.setAttribute(
-    "data-theme",
-    data.profile.theme
-  );
-
   const titles = {
-    dashboard: "Dashboard",
-    transactions: "Transactions",
-    wallets: "Wallets",
-    budgets: "Budgets",
-    goals: "Savings Goals",
-    loans: "Loans",
-    recurring: "Recurring Payments",
-    receipts: "Receipt Scanner",
-    analytics: "Analytics",
-    reports: "Reports",
-    pro: "Finance Pro",
-    backup: "Backup & Restore",
-    settings: "Settings"
+    dashboard: "Your financial universe.",
+    transactions: "Every move, accounted for.",
+    wallets: "Your money, in one place.",
+    budgets: "Give every rupee a purpose.",
+    goals: "Small steps. Bigger dreams.",
+    loans: "Your repayment command centre.",
+    recurring: "Stay ahead of regular payments.",
+    receipts: "Turn receipts into records.",
+    analytics: "Understand your money.",
+    reports: "Your numbers, clearly presented.",
+    pro: "Unlock your next level.",
+    settings: "Make FINOVA yours."
   };
 
-  document.getElementById("page-title").textContent =
-    titles[currentPage] || "Dashboard";
+  $("currentSection").textContent = page.charAt(0).toUpperCase() + page.slice(1);
+  $("pageHeading").textContent = titles[page];
+  renderPage();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
+function renderPage() {
+  const content = $("pageContent");
   const pages = {
     dashboard: renderDashboard,
     transactions: renderTransactions,
@@ -361,3039 +176,819 @@ function render() {
     analytics: renderAnalytics,
     reports: renderReports,
     pro: renderPro,
-    backup: renderBackup,
     settings: renderSettings
   };
-
-  document.getElementById("app-content").innerHTML =
-    `<div class="page">${pages[currentPage]()}</div>`;
-
-  if (currentPage === "dashboard") {
-    setTimeout(drawDashboardCharts,50);
-  }
-
-  if (currentPage === "analytics") {
-    setTimeout(drawAnalyticsCharts,50);
-  }
+  content.innerHTML = pages[currentPage]();
 }
 
-function statCard(label,value,className,meta) {
-  return `
-    <div class="stat-card">
-      <div class="stat-label">${label}</div>
-      <div class="stat-value ${className}">${money(value)}</div>
-      <div class="stat-meta">${meta}</div>
+function stat(label, value, icon, color, foot) {
+  return `<article class="stat-card" style="--accent:${color};--glow:${color}20">
+    <div class="stat-top"><span class="stat-label">${label}</span><span class="stat-icon">${icon}</span></div>
+    <div class="stat-value">${value}</div>
+    <div class="stat-foot">${foot}</div>
+  </article>`;
+}
+
+function panel(title, subtitle, content, action = "") {
+  return `<section class="panel">
+    <div class="panel-head"><div><h3>${title}</h3>${subtitle ? `<p>${subtitle}</p>` : ""}</div>${action}</div>
+    ${content}
+  </section>`;
+}
+
+function emptyState(icon, title, message, button, action) {
+  return `<div class="empty-state"><div class="empty-icon">${icon}</div>
+    <strong>${title}</strong><p>${message}</p>
+    ${button ? `<button class="btn btn-secondary" data-action="${action}">${button}</button>` : ""}
+  </div>`;
+}
+
+function recentTransactions(limit = 6) {
+  const tx = [...data.transactions].sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id.localeCompare(a.id)).slice(0, limit);
+  if (!tx.length) return emptyState("⇄", "Your story starts here", "Add your first income or expense to see activity.", "Add transaction", "add-transaction");
+
+  return `<div class="table-wrap"><table><thead><tr><th>DETAILS</th><th>DATE</th><th>AMOUNT</th></tr></thead><tbody>
+    ${tx.map(t => `<tr>
+      <td><div class="item-main"><span class="item-icon">${t.type === "income" ? "↙" : "↗"}</span>
+        <div><strong>${esc(t.title)}</strong><small>${esc(t.category)}</small></div></div></td>
+      <td>${esc(t.date)}</td>
+      <td class="amount ${t.type === "income" ? "positive" : "negative"}">${t.type === "income" ? "+" : "−"}${money(t.amount)}</td>
+    </tr>`).join("")}
+    </tbody></table></div>`;
+}
+
+function categorySpending(transactions) {
+  const map = {};
+  transactions.filter(t => t.type === "expense").forEach(t => {
+    map[t.category] = (map[t.category] || 0) + number(t.amount);
+  });
+  return Object.entries(map).sort((a,b) => b[1] - a[1]);
+}
+
+const chartColors = ["#58f1e3","#9a7cff","#ef8dff","#63edb0","#ffbf69","#7fa5ff","#ff7895","#7ce0d0"];
+
+function spendingDonut(transactions) {
+  const cats = categorySpending(transactions);
+  const total = sum(cats, c => c[1]);
+  if (!total) return emptyState("◉", "No spending data yet", "Record expenses to generate your breakdown.");
+
+  let cursor = 0;
+  const stops = cats.map((c, i) => {
+    const start = cursor;
+    cursor += c[1] / total * 360;
+    return `${chartColors[i % chartColors.length]} ${start}deg ${cursor}deg`;
+  }).join(", ");
+
+  return `<div class="donut-layout">
+    <div class="donut" style="background:conic-gradient(${stops})">
+      <div class="donut-center"><strong>${money(total)}</strong><small>Total spent</small></div>
     </div>
-  `;
+    <div class="legend">${cats.slice(0,6).map((c,i) => `<div class="legend-row">
+      <span class="legend-dot" style="background:${chartColors[i % chartColors.length]}"></span>
+      <span>${esc(c[0])}</span><strong>${Math.round(c[1]/total*100)}%</strong>
+    </div>`).join("")}</div>
+  </div>`;
 }
-
-/* =========================================================
-   DASHBOARD
-   ========================================================= */
 
 function renderDashboard() {
-  const t = totals();
-  const month = monthlyTotals();
-
-  const recent = [...data.transactions]
-    .sort((a,b) => b.date.localeCompare(a.date))
-    .slice(0,6);
-
-  const savingsRate = month.income
-    ? Math.round(((month.income - month.expenses) / month.income) * 100)
-    : 0;
-
-  const activeLoans = data.loans.filter(
-    loan => loan.paidEmis < loan.totalEmis
-  );
-
-  return `
-    <section class="stats-grid">
-      ${statCard("TOTAL BALANCE",t.balance,"neutral","Across all wallets")}
-      ${statCard("TOTAL INCOME",t.income,"income","All recorded income")}
-      ${statCard("TOTAL EXPENSES",t.expenses,"expense","All recorded spending")}
-      ${statCard("NET POSITION",t.net,t.net >= 0 ? "income":"expense","Income minus expenses")}
-    </section>
-
-    <div class="dashboard-grid">
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>Cashflow overview</h3>
-            <p>Income and expenses by month</p>
-          </div>
-          <span class="badge">LIVE LOCAL DATA</span>
-        </div>
-
-        <div class="chart-box">
-          <canvas id="trend-chart"></canvas>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>Spending categories</h3>
-            <p>Where your money goes</p>
-          </div>
-        </div>
-
-        <div class="chart-box small">
-          <canvas id="expense-chart"></canvas>
-        </div>
-      </section>
-
-    </div>
-
-    <section class="panel">
-      <div class="panel-header">
-        <div>
-          <h3>Quick actions</h3>
-          <p>Manage your money faster</p>
-        </div>
-      </div>
-
-      <div class="quick-actions">
-        <button onclick="openTransactionModal('income')">
-          <span>↗</span>Add income
-        </button>
-
-        <button onclick="openTransactionModal('expense')">
-          <span>↘</span>Add expense
-        </button>
-
-        <button onclick="openWalletModal()">
-          <span>▣</span>New wallet
-        </button>
-
-        <button onclick="openLoanModal()">
-          <span>▰</span>New loan
-        </button>
-
-        <button onclick="navigateTo('loans')">
-          <span>₹</span>Pay EMI
-        </button>
-
-        <button onclick="navigateTo('pro')">
-          <span>✦</span>Finance Pro
-        </button>
-      </div>
-    </section>
-
-    ${activeLoans.length ? `
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>Loan command center</h3>
-            <p>Your active EMI commitments</p>
-          </div>
-
-          <button class="secondary-btn" onclick="navigateTo('loans')">
-            View loans
-          </button>
-        </div>
-
-        <div class="cards-grid">
-          ${activeLoans.slice(0,3).map(loanMiniCard).join("")}
-        </div>
-      </section>
-    ` : ""}
-
-    <div class="dashboard-grid">
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>Recent transactions</h3>
-            <p>Your latest financial activity</p>
-          </div>
-
-          <button class="secondary-btn"
-            onclick="navigateTo('transactions')">
-            View all
-          </button>
-        </div>
-
-        ${transactionTable(recent)}
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>Smart insights</h3>
-            <p>Automatic observations from your data</p>
-          </div>
-        </div>
-
-        ${generateInsights()}
-      </section>
-
-    </div>
-
-    <section class="panel">
-      <div class="panel-header">
-        <div>
-          <h3>Monthly performance</h3>
-          <p>${new Date().toLocaleString("en-IN",{month:"long",year:"numeric"})}</p>
-        </div>
-
-        <span class="badge">${savingsRate}% savings rate</span>
-      </div>
-
-      <div class="progress">
-        <div class="progress-bar"
-          style="width:${Math.max(0,Math.min(100,savingsRate))}%">
-        </div>
-      </div>
-
-      <p class="stat-meta">
-        ${
-          month.income
-            ? `You saved ${money(month.income-month.expenses)} this month.`
-            : "Add income and expenses to unlock monthly performance insights."
-        }
-      </p>
-    </section>
-  `;
-}
-
-/* =========================================================
-   TRANSACTIONS
-   ========================================================= */
-
-function transactionTable(transactions) {
-  if (!transactions.length) {
-    return `
-      <div class="empty">
-        <strong>No transactions yet</strong>
-        Add your first income or expense to begin.
-      </div>
-    `;
-  }
+  const all = totals();
+  const m = monthTotals();
+  const wallet = data.wallets[0];
+  const balance = all.walletTotal;
+  const monthlySaved = m.income - m.expenses;
+  const budgets = data.budgets.slice(0, 3);
+  const budgetHTML = budgets.length ? budgets.map(b => {
+    const spent = sum(monthTransactions().filter(t => t.type === "expense" && t.category === b.category), t => t.amount);
+    const pct = b.limit > 0 ? Math.min(100, spent / b.limit * 100) : 0;
+    return `<div style="margin-bottom:18px">
+      <div class="progress-line"><strong>${esc(b.category)}</strong><span>${money(spent)} / ${money(b.limit)}</span></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;${pct>=100?"background:var(--red)":""}"></div></div>
+    </div>`;
+  }).join("") : emptyState("◉","No budgets yet","Create a budget to monitor category spending.","Create budget","add-budget");
 
   return `
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>TRANSACTION</th>
-            <th>DATE</th>
-            <th>WALLET</th>
-            <th>AMOUNT</th>
-            <th>ACTION</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          ${transactions.map(transaction => {
-            const wallet = data.wallets.find(
-              w => w.id === transaction.walletId
-            );
-
-            return `
-              <tr>
-                <td>
-                  <span class="transaction-name">
-                    <span class="category-icon">
-                      ${icons[transaction.category] || "◈"}
-                    </span>
-
-                    <span>
-                      <strong>${escapeHTML(transaction.description)}</strong>
-                      <br>
-                      <small>${escapeHTML(transaction.category)}</small>
-                    </span>
-                  </span>
-                </td>
-
-                <td>${escapeHTML(transaction.date)}</td>
-
-                <td>
-                  ${escapeHTML(wallet ? wallet.name : "Unknown")}
-                </td>
-
-                <td class="${transaction.type === "income" ? "income":"expense"}">
-                  ${transaction.type === "income" ? "+" : "-"}${money(transaction.amount)}
-                </td>
-
-                <td>
-                  <button class="danger-btn"
-                    onclick="deleteTransaction('${transaction.id}')">
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            `;
-          }).join("")}
-        </tbody>
-      </table>
+    <div class="inline-actions" style="justify-content:space-between;margin-bottom:17px">
+      <span class="pill cyan"><span class="live-dot"></span> YOUR MONEY OVERVIEW</span>
+      <button class="btn btn-primary" data-action="add-transaction">＋ Add transaction</button>
     </div>
-  `;
+    <div class="grid grid-4">
+      ${stat("Total wallet balance",money(balance),"▣","#58f1e3",`${data.wallets.length} wallet(s) tracked`)}
+      ${stat("Income this month",money(m.income),"↙","#63edb0","Recorded this month")}
+      ${stat("Expenses this month",money(m.expenses),"↗","#ff7895","Recorded this month")}
+      ${stat("Net this month",money(monthlySaved),"⌁","#9a7cff",monthlySaved>=0?"Income minus expenses":"Expenses exceed income")}
+    </div>
+
+    <div class="grid grid-2 section-gap">
+      <section class="bank-card">
+        <div class="bank-card-top"><span class="eyebrow" style="color:#fff">FINOVA · VIRTUAL CARD</span><span class="card-contactless">)))</span></div>
+        <div class="card-balance"><small>TRACKED WALLET BALANCE</small><strong>${money(balance)}</strong></div>
+        <div class="bank-card-bottom"><div><span class="card-number">•••• &nbsp;•••• &nbsp;•••• &nbsp;${String(wallet?.id || "0000").replace(/\W/g,"").slice(-4).padStart(4,"0")}</span><span class="card-holder">${esc(data.profile?.name || "FINOVA USER").toUpperCase()}</span></div><span class="card-network">F</span></div>
+        <div class="card-decor"></div>
+      </section>
+      ${panel("Your money snapshot","All-time totals",
+        `<div class="progress-line"><span>Total income</span><strong class="positive">${money(all.income)}</strong></div>
+         <div class="progress-line"><span>Total expenses</span><strong class="negative">${money(all.expenses)}</strong></div>
+         <div class="progress-line"><span>Saved towards goals</span><strong>${money(all.savedGoals)}</strong></div>
+         <div class="progress-line"><span>Remaining loan principal</span><strong>${money(all.debt)}</strong></div>
+         <div class="notice" style="margin-top:15px">Your balance uses the opening balances you entered plus recorded transactions. It is not a live bank balance.</div>`)}
+    </div>
+
+    <div class="grid grid-2 section-gap">
+      ${panel("Spending intelligence","This month's expense categories",spendingDonut(monthTransactions()),`<button class="mini-link" data-page="analytics">View insights ↗</button>`)}
+      ${panel("Budget radar","Keep your spending on track",budgetHTML,`<button class="mini-link" data-action="add-budget">＋ Add</button>`)}
+    </div>
+
+    <div class="section-gap">
+      ${panel("Recent activity","Your latest recorded money movements",recentTransactions(),`<button class="mini-link" data-page="transactions">All transactions ↗</button>`)}
+    </div>
+    <div class="grid grid-3 section-gap">
+      <article class="feature-card"><div class="feature-icon">◎</div><h3>Savings goals</h3><p>${data.goals.length ? `${data.goals.length} goal(s) in progress.` : "Create a goal and track your progress."}</p><button class="mini-link" data-page="goals">Open goals →</button></article>
+      <article class="feature-card"><div class="feature-icon">↗</div><h3>Loan control</h3><p>${data.loans.length ? `${data.loans.length} loan(s) being tracked.` : "Track repayments and estimated EMI."}</p><button class="mini-link" data-page="loans">Open loans →</button></article>
+      <article class="feature-card"><div class="feature-icon">✦</div><h3>FINOVA Pro</h3><p>Explore premium tools and reporting features.</p><button class="mini-link" data-page="pro">Explore Pro →</button></article>
+    </div>`;
 }
 
 function renderTransactions() {
-  return `
-    <section class="panel">
+  const rows = [...data.transactions].sort((a,b) => (b.date || "").localeCompare(a.date || "")).map(t => `
+    <tr>
+      <td><div class="item-main"><span class="item-icon">${t.type==="income"?"↙":"↗"}</span><div><strong>${esc(t.title)}</strong><small>${esc(t.category)} · ${esc(data.wallets.find(w=>w.id===t.walletId)?.name || "Wallet removed")}</small></div></div></td>
+      <td>${esc(t.date)}</td>
+      <td><span class="pill">${esc(t.type)}</span></td>
+      <td class="amount ${t.type==="income"?"positive":"negative"}">${t.type==="income"?"+":"−"}${money(t.amount)}</td>
+      <td><button class="small-btn" data-action="delete-tx" data-id="${esc(t.id)}">Delete</button></td>
+    </tr>`).join("");
 
-      <div class="panel-header">
-        <div>
-          <h3>All transactions</h3>
-          <p>Track every movement of money</p>
-        </div>
-
-        <button class="primary-btn"
-          onclick="openTransactionModal()">
-          + Add
-        </button>
-      </div>
-
-      <div class="toolbar">
-        <input id="transaction-search"
-          placeholder="Search transactions..."
-          oninput="filterTransactions()">
-
-        <select id="transaction-type-filter"
-          onchange="filterTransactions()">
-          <option value="all">All types</option>
-          <option value="income">Income</option>
-          <option value="expense">Expenses</option>
-        </select>
-
-        <select id="transaction-category-filter"
-          onchange="filterTransactions()">
-          <option value="all">All categories</option>
-          ${categories.map(category => `<option>${category}</option>`).join("")}
-        </select>
-      </div>
-
-      <div id="transaction-results">
-        ${transactionTable(
-          [...data.transactions]
-          .sort((a,b) => b.date.localeCompare(a.date))
-        )}
-      </div>
-
-    </section>
-  `;
+  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px">
+    <span class="muted">${data.transactions.length} recorded transaction(s)</span>
+    <button class="btn btn-primary" data-action="add-transaction">＋ Add transaction</button>
+  </div>
+  ${panel("Transaction ledger","Only entries you have saved appear here",
+    rows ? `<div class="table-wrap"><table><thead><tr><th>TRANSACTION</th><th>DATE</th><th>TYPE</th><th>AMOUNT</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : emptyState("⇄","Nothing recorded yet","Add your first transaction to start tracking.","Add transaction","add-transaction"))}`;
 }
-
-function filterTransactions() {
-  const query =
-    document.getElementById("transaction-search").value.toLowerCase();
-
-  const type =
-    document.getElementById("transaction-type-filter").value;
-
-  const category =
-    document.getElementById("transaction-category-filter").value;
-
-  const filtered = data.transactions.filter(transaction => {
-
-    const matchesQuery =
-      transaction.description.toLowerCase().includes(query) ||
-      transaction.category.toLowerCase().includes(query) ||
-      (transaction.notes || "").toLowerCase().includes(query);
-
-    const matchesType =
-      type === "all" || transaction.type === type;
-
-    const matchesCategory =
-      category === "all" ||
-      transaction.category === category;
-
-    return matchesQuery &&
-      matchesType &&
-      matchesCategory;
-  });
-
-  document.getElementById("transaction-results").innerHTML =
-    transactionTable(
-      filtered.sort((a,b) => b.date.localeCompare(a.date))
-    );
-}
-
-function openTransactionModal(type="expense") {
-  const walletOptions = data.wallets.map(wallet =>
-    `<option value="${wallet.id}">
-      ${escapeHTML(wallet.name)}
-    </option>`
-  ).join("");
-
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Add transaction</h2>
-
-    <form onsubmit="saveTransaction(event)">
-
-      <div class="form-grid">
-
-        <div class="form-group">
-          <label>Transaction type</label>
-
-          <select name="type">
-            <option value="expense"
-              ${type === "expense" ? "selected":""}>
-              Expense
-            </option>
-
-            <option value="income"
-              ${type === "income" ? "selected":""}>
-              Income
-            </option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Amount (${data.profile.currency})</label>
-          <input name="amount"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required>
-        </div>
-
-        <div class="form-group">
-          <label>Description</label>
-          <input name="description"
-            required
-            placeholder="e.g. Grocery shopping">
-        </div>
-
-        <div class="form-group">
-          <label>Category</label>
-
-          <select name="category">
-            ${categories.map(category =>
-              `<option>${category}</option>`
-            ).join("")}
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Wallet</label>
-
-          <select name="walletId" required>
-            ${walletOptions}
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Date</label>
-
-          <input name="date"
-            type="date"
-            value="${today()}"
-            required>
-        </div>
-
-        <div class="form-group full">
-          <label>Notes</label>
-
-          <textarea name="notes"
-            rows="3"
-            placeholder="Optional notes"></textarea>
-        </div>
-
-      </div>
-
-      <div class="form-actions">
-        <button type="button"
-          class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn"
-          type="submit">
-          Save transaction
-        </button>
-      </div>
-
-    </form>
-  `);
-}
-
-function saveTransaction(event) {
-  event.preventDefault();
-
-  const form = new FormData(event.target);
-  const amount = numberValue(form.get("amount"));
-
-  if (amount <= 0) {
-    showToast("Enter a valid amount.","error");
-    return;
-  }
-
-  data.transactions.push({
-    id: uid("transaction"),
-    type: form.get("type"),
-    amount,
-    description: form.get("description").trim(),
-    category: form.get("category"),
-    walletId: form.get("walletId"),
-    date: form.get("date"),
-    notes: form.get("notes").trim(),
-    createdAt: new Date().toISOString()
-  });
-
-  saveData();
-  closeModalDirect();
-  showToast("Transaction saved.");
-  render();
-}
-
-function deleteTransaction(id) {
-  if (!confirm("Delete this transaction?")) return;
-
-  data.transactions =
-    data.transactions.filter(item => item.id !== id);
-
-  saveData();
-  showToast("Transaction deleted.");
-  render();
-}
-
-/* =========================================================
-   WALLETS
-   ========================================================= */
 
 function renderWallets() {
-  return `
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Your wallets and accounts</h3>
-          <p>Manage cash, bank accounts and digital wallets</p>
-        </div>
-
-        <button class="primary-btn"
-          onclick="openWalletModal()">
-          + New wallet
-        </button>
+  const all = totals();
+  const cards = data.wallets.map((w,i) => `
+    <article class="wallet-card">
+      <div class="wallet-card-head"><span class="wallet-icon">▣</span><span class="pill ${w.frozen?"":"cyan"}">${w.frozen?"Frozen demo":"Active"}</span></div>
+      <h3>${esc(w.name)}</h3><p class="muted">${esc(w.type)} · ${data.transactions.filter(t=>t.walletId===w.id).length} transactions</p>
+      <div class="wallet-balance">${money(walletBalance(w.id))}</div>
+      <div class="bank-card ${esc(w.theme || "card-dark")}" style="min-height:155px;padding:16px;animation:none">
+        <div class="bank-card-top"><span class="eyebrow" style="color:white">FINOVA · DEMO CARD</span><span class="card-chip"></span></div>
+        <div class="card-balance" style="margin:18px 0"><small>TRACKED BALANCE</small><strong style="font-size:22px">${money(walletBalance(w.id))}</strong></div>
+        <div class="bank-card-bottom"><span class="card-number">•••• •••• •••• ${String(i+1).padStart(4,"0")}</span><span class="card-network">F</span></div>
       </div>
-
-      <div class="cards-grid">
-        ${data.wallets.map(wallet => `
-          <div class="wallet-card">
-
-            <div class="wallet-top">
-              <div class="wallet-symbol">▣</div>
-
-              <button class="danger-btn"
-                onclick="deleteWallet('${wallet.id}')">
-                Delete
-              </button>
-            </div>
-
-            <h3>${escapeHTML(wallet.name)}</h3>
-
-            <small>${escapeHTML(wallet.type)}</small>
-
-            <div class="card-amount">
-              ${money(walletBalance(wallet.id))}
-            </div>
-
-            <small>
-              Opening balance: ${money(wallet.opening)}
-            </small>
-
-          </div>
-        `).join("")}
+      <div class="inline-actions" style="margin-top:13px">
+        <button class="small-btn" data-action="toggle-wallet" data-id="${esc(w.id)}">${w.frozen?"Unfreeze demo":"Freeze demo"}</button>
+        ${w.id!=="main"?`<button class="small-btn" data-action="delete-wallet" data-id="${esc(w.id)}">Delete</button>`:""}
       </div>
+    </article>`).join("");
 
-    </section>
-  `;
+  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px">
+    <span class="muted">Tracked total: <strong>${money(all.walletTotal)}</strong></span>
+    <button class="btn btn-primary" data-action="add-wallet">＋ Add wallet</button>
+  </div>
+  <div class="wallet-grid">${cards}</div>
+  <div class="notice section-gap">These are simulated wallet and card displays. They do not create bank accounts, issue payment cards, or connect to a bank. Freezing a card here changes only its demo status.</div>`;
 }
-
-function openWalletModal() {
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Create wallet</h2>
-
-    <form onsubmit="saveWallet(event)">
-
-      <div class="form-group">
-        <label>Wallet name</label>
-        <input name="name"
-          required
-          placeholder="e.g. HDFC Bank">
-      </div>
-
-      <div class="form-group">
-        <label>Wallet type</label>
-
-        <select name="type">
-          <option>Cash</option>
-          <option>Bank account</option>
-          <option>Credit card</option>
-          <option>Digital wallet</option>
-          <option>Investment</option>
-          <option>Other</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label>Opening balance</label>
-        <input name="opening"
-          type="number"
-          step="0.01"
-          value="0">
-      </div>
-
-      <div class="form-actions">
-        <button type="button"
-          class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn">
-          Create wallet
-        </button>
-      </div>
-
-    </form>
-  `);
-}
-
-function saveWallet(event) {
-  event.preventDefault();
-
-  const form = new FormData(event.target);
-
-  data.wallets.push({
-    id: uid("wallet"),
-    name: form.get("name").trim(),
-    type: form.get("type"),
-    opening: numberValue(form.get("opening"))
-  });
-
-  saveData();
-  closeModalDirect();
-  showToast("Wallet created.");
-  render();
-}
-
-function deleteWallet(id) {
-  if (data.wallets.length <= 1) {
-    showToast("You must keep at least one wallet.","error");
-    return;
-  }
-
-  if (data.transactions.some(t => t.walletId === id)) {
-    showToast(
-      "This wallet has transactions and cannot be deleted.",
-      "error"
-    );
-    return;
-  }
-
-  data.wallets =
-    data.wallets.filter(wallet => wallet.id !== id);
-
-  saveData();
-  showToast("Wallet deleted.");
-  render();
-}
-
-/* =========================================================
-   BUDGETS
-   ========================================================= */
 
 function renderBudgets() {
-  return `
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Monthly budgets</h3>
-          <p>Set spending limits for categories</p>
-        </div>
-
-        <button class="primary-btn"
-          onclick="openBudgetModal()">
-          + Add budget
-        </button>
-      </div>
-
-      ${
-        data.budgets.length
-        ? `
-          <div class="cards-grid">
-            ${data.budgets.map(budget => {
-
-              const spent = data.transactions
-                .filter(t =>
-                  t.type === "expense" &&
-                  t.category === budget.category &&
-                  t.date.startsWith(budget.month)
-                )
-                .reduce(
-                  (sum,t) => sum + numberValue(t.amount),
-                  0
-                );
-
-              const percentage =
-                budget.limit
-                ? Math.round((spent / budget.limit) * 100)
-                : 0;
-
-              return `
-                <div class="budget-card">
-
-                  <div class="wallet-top">
-                    <div class="category-icon">
-                      ${icons[budget.category] || "◈"}
-                    </div>
-
-                    <button class="danger-btn"
-                      onclick="deleteBudget('${budget.id}')">
-                      Delete
-                    </button>
-                  </div>
-
-                  <h3>${escapeHTML(budget.category)}</h3>
-                  <small>${budget.month}</small>
-
-                  <div class="card-amount">
-                    ${money(spent)}
-                  </div>
-
-                  <div class="progress">
-                    <div class="progress-bar"
-                      style="
-                        width:${Math.min(100,percentage)}%;
-                        ${percentage > 100 ? "background:var(--red)" : ""}
-                      ">
-                    </div>
-                  </div>
-
-                  <div class="progress-label">
-                    <span>${percentage}% used</span>
-                    <span>Limit: ${money(budget.limit)}</span>
-                  </div>
-
-                </div>
-              `;
-            }).join("")}
-          </div>
-        `
-        : `
-          <div class="empty">
-            <strong>No budgets created</strong>
-            Create a budget to control your spending.
-          </div>
-        `
-      }
-
-    </section>
-  `;
+  const list = data.budgets.map(b => {
+    const spent = sum(monthTransactions().filter(t=>t.type==="expense" && t.category===b.category),t=>t.amount);
+    const pct = b.limit ? spent/b.limit*100 : 0;
+    const over = spent > b.limit;
+    return `<article class="goal-card">
+      <div class="wallet-card-head"><span class="wallet-icon">◉</span><span class="pill ${over?"":"cyan"}">${over?"Over budget":"Budget"}</span></div>
+      <h3>${esc(b.category)}</h3><div class="wallet-balance">${money(spent)} <small>spent</small></div>
+      <div class="progress-line"><span>Monthly limit</span><strong>${money(b.limit)}</strong></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,pct)}%;${over?"background:var(--red)":""}"></div></div>
+      <div class="progress-line"><span>${Math.round(pct)}% used</span><span>${money(Math.max(0,b.limit-spent))} left</span></div>
+      <button class="small-btn" data-action="delete-budget" data-id="${esc(b.id)}">Delete budget</button>
+    </article>`;
+  }).join("");
+  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Budgets calculate spending from saved expenses this month.</span><button class="btn btn-primary" data-action="add-budget">＋ Create budget</button></div>
+    ${list ? `<div class="goal-grid">${list}</div>` : emptyState("◉","Plan your spending","Set category limits and FINOVA will calculate how much you've used.","Create budget","add-budget")}`;
 }
-
-function openBudgetModal() {
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Create budget</h2>
-
-    <form onsubmit="saveBudget(event)">
-
-      <div class="form-group">
-        <label>Category</label>
-
-        <select name="category">
-          ${categories
-            .filter(c => c !== "Salary")
-            .map(c => `<option>${c}</option>`)
-            .join("")}
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label>Monthly limit</label>
-        <input name="limit"
-          type="number"
-          min="1"
-          required>
-      </div>
-
-      <div class="form-group">
-        <label>Month</label>
-        <input name="month"
-          type="month"
-          value="${monthKey()}"
-          required>
-      </div>
-
-      <div class="form-actions">
-        <button type="button"
-          class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn">
-          Save budget
-        </button>
-      </div>
-
-    </form>
-  `);
-}
-
-function saveBudget(event) {
-  event.preventDefault();
-
-  const form = new FormData(event.target);
-
-  data.budgets.push({
-    id: uid("budget"),
-    category: form.get("category"),
-    limit: numberValue(form.get("limit")),
-    month: form.get("month")
-  });
-
-  saveData();
-  closeModalDirect();
-  showToast("Budget created.");
-  render();
-}
-
-function deleteBudget(id) {
-  data.budgets =
-    data.budgets.filter(item => item.id !== id);
-
-  saveData();
-  showToast("Budget deleted.");
-  render();
-}
-
-/* =========================================================
-   SAVINGS GOALS
-   ========================================================= */
 
 function renderGoals() {
-  return `
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Savings goals</h3>
-          <p>Turn your plans into measurable targets</p>
-        </div>
-
-        <button class="primary-btn"
-          onclick="openGoalModal()">
-          + New goal
-        </button>
-      </div>
-
-      ${
-        data.goals.length
-        ? `
-          <div class="cards-grid">
-            ${data.goals.map(goal => {
-
-              const percentage =
-                goal.target
-                ? Math.round((goal.saved / goal.target) * 100)
-                : 0;
-
-              return `
-                <div class="goal-card">
-
-                  <div class="goal-top">
-                    <div class="category-icon">◎</div>
-
-                    <button class="danger-btn"
-                      onclick="deleteGoal('${goal.id}')">
-                      Delete
-                    </button>
-                  </div>
-
-                  <h3>${escapeHTML(goal.name)}</h3>
-
-                  <small>
-                    Deadline:
-                    ${escapeHTML(goal.deadline || "Not set")}
-                  </small>
-
-                  <div class="card-amount">
-                    ${money(goal.saved)}
-                  </div>
-
-                  <div class="progress">
-                    <div class="progress-bar"
-                      style="width:${Math.min(100,percentage)}%">
-                    </div>
-                  </div>
-
-                  <div class="progress-label">
-                    <span>${percentage}% complete</span>
-                    <span>${money(goal.target)} target</span>
-                  </div>
-
-                  <button
-                    class="secondary-btn"
-                    style="margin-top:15px;width:100%"
-                    onclick="addToGoal('${goal.id}')">
-                    + Add savings
-                  </button>
-
-                </div>
-              `;
-            }).join("")}
-          </div>
-        `
-        : `
-          <div class="empty">
-            <strong>No savings goals</strong>
-            Create a goal for your next big achievement.
-          </div>
-        `
-      }
-
-    </section>
-  `;
-}
-
-function openGoalModal() {
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Create savings goal</h2>
-
-    <form onsubmit="saveGoal(event)">
-
-      <div class="form-group">
-        <label>Goal name</label>
-        <input name="name"
-          required
-          placeholder="e.g. New laptop">
-      </div>
-
-      <div class="form-group">
-        <label>Target amount</label>
-        <input name="target"
-          type="number"
-          min="1"
-          required>
-      </div>
-
-      <div class="form-group">
-        <label>Already saved</label>
-        <input name="saved"
-          type="number"
-          min="0"
-          value="0">
-      </div>
-
-      <div class="form-group">
-        <label>Deadline</label>
-        <input name="deadline"
-          type="date">
-      </div>
-
-      <div class="form-actions">
-        <button type="button"
-          class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn">
-          Create goal
-        </button>
-      </div>
-
-    </form>
-  `);
-}
-
-function saveGoal(event) {
-  event.preventDefault();
-
-  const form = new FormData(event.target);
-
-  data.goals.push({
-    id: uid("goal"),
-    name: form.get("name").trim(),
-    target: numberValue(form.get("target")),
-    saved: numberValue(form.get("saved")),
-    deadline: form.get("deadline")
-  });
-
-  saveData();
-  closeModalDirect();
-  showToast("Savings goal created.");
-  render();
-}
-
-function addToGoal(id) {
-  const amount = prompt("How much did you save?");
-
-  if (amount === null) return;
-
-  const value = numberValue(amount);
-
-  if (value <= 0) {
-    showToast("Enter a valid amount.","error");
-    return;
-  }
-
-  const goal = data.goals.find(item => item.id === id);
-
-  if (!goal) return;
-
-  goal.saved += value;
-
-  saveData();
-  showToast("Savings added.");
-  render();
-}
-
-function deleteGoal(id) {
-  data.goals =
-    data.goals.filter(item => item.id !== id);
-
-  saveData();
-  showToast("Goal deleted.");
-  render();
-}
-
-/* =========================================================
-   LOANS
-   ========================================================= */
-
-function loanProgress(loan) {
-  if (!loan.totalEmis) return 0;
-
-  return Math.min(
-    100,
-    Math.round(
-      (numberValue(loan.paidEmis) /
-       numberValue(loan.totalEmis)) * 100
-    )
-  );
-}
-
-function loanRemainingEmis(loan) {
-  return Math.max(
-    0,
-    numberValue(loan.totalEmis) -
-    numberValue(loan.paidEmis)
-  );
-}
-
-function loanTotalPayable(loan) {
-  return numberValue(loan.emi) *
-    numberValue(loan.totalEmis);
-}
-
-function loanOutstanding(loan) {
-  return Math.max(
-    0,
-    loanTotalPayable(loan) -
-    numberValue(loan.emi) *
-    numberValue(loan.paidEmis)
-  );
-}
-
-function loanMiniCard(loan) {
-  const percentage = loanProgress(loan);
-  const remaining = loanRemainingEmis(loan);
-
-  return `
-    <div class="loan-card">
-
-      <div class="loan-header">
-        <div class="loan-title">
-          <div class="loan-icon">₹</div>
-
-          <div>
-            <h3>${escapeHTML(loan.name)}</h3>
-            <small>${escapeHTML(loan.lender || "Loan")}</small>
-          </div>
-        </div>
-
-        <div class="loan-progress-number">
-          ${percentage}%
-        </div>
-      </div>
-
-      <div class="progress" style="margin-top:18px">
-        <div class="progress-bar"
-          style="width:${percentage}%">
-        </div>
-      </div>
-
-      <div class="loan-stats">
-
-        <div class="loan-stat">
-          <small>EMI</small>
-          <strong>${money(loan.emi)}</strong>
-        </div>
-
-        <div class="loan-stat">
-          <small>Paid</small>
-          <strong>${loan.paidEmis}/${loan.totalEmis}</strong>
-        </div>
-
-        <div class="loan-stat">
-          <small>Remaining</small>
-          <strong>${remaining}</strong>
-        </div>
-
-      </div>
-
-      <button
-        class="primary-btn"
-        style="width:100%"
-        onclick="payLoanEmi('${loan.id}')"
-        ${remaining <= 0 ? "disabled":""}>
-        ${remaining <= 0 ? "✓ Loan completed":"Pay EMI"}
-      </button>
-
-    </div>
-  `;
+  const cards = data.goals.map(g => {
+    const pct = g.target ? g.saved/g.target*100 : 0;
+    return `<article class="goal-card">
+      <div class="wallet-card-head"><span class="goal-emoji">${esc(g.emoji || "◎")}</span><span class="pill purple">${Math.min(100,Math.round(pct))}% complete</span></div>
+      <h3>${esc(g.name)}</h3><p class="muted">${g.deadline ? "Target date: "+esc(g.deadline) : "No target date set"}</p>
+      <div class="wallet-balance">${money(g.saved)} <small>saved</small></div>
+      <div class="progress-line"><span>Target</span><strong>${money(g.target)}</strong></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,pct)}%"></div></div>
+      <div class="inline-actions" style="margin-top:14px"><button class="small-btn" data-action="contribute-goal" data-id="${esc(g.id)}">＋ Add savings</button><button class="small-btn" data-action="delete-goal" data-id="${esc(g.id)}">Delete</button></div>
+    </article>`;
+  }).join("");
+  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Record progress toward your personal targets.</span><button class="btn btn-primary" data-action="add-goal">＋ New goal</button></div>
+    ${cards ? `<div class="goal-grid">${cards}</div>` : emptyState("◎","Dream it. Track it.","Create a savings goal and watch your progress grow.","Create goal","add-goal")}`;
 }
 
 function renderLoans() {
-  const totalOutstanding = data.loans
-    .filter(l => loanRemainingEmis(l) > 0)
-    .reduce((sum,l) => sum + loanOutstanding(l),0);
-
-  const monthlyEmi = data.loans
-    .filter(l => loanRemainingEmis(l) > 0)
-    .reduce((sum,l) => sum + numberValue(l.emi),0);
-
-  const completed = data.loans.filter(
-    l => loanProgress(l) >= 100
-  ).length;
-
-  return `
-    <section class="stats-grid">
-
-      ${statCard(
-        "ACTIVE LOANS",
-        data.loans.filter(l => loanRemainingEmis(l) > 0).length,
-        "neutral",
-        "Currently running"
-      )}
-
-      ${statCard(
-        "MONTHLY EMI",
-        monthlyEmi,
-        "expense",
-        "Current EMI commitment"
-      )}
-
-      ${statCard(
-        "OUTSTANDING",
-        totalOutstanding,
-        "expense",
-        "Estimated remaining EMI value"
-      )}
-
-      ${statCard(
-        "COMPLETED",
-        completed,
-        "income",
-        "Fully paid loans"
-      )}
-
-    </section>
-
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Loan command center</h3>
-          <p>Track every loan and pay EMIs from one place.</p>
-        </div>
-
-        <button class="primary-btn"
-          onclick="openLoanModal()">
-          + Add loan
-        </button>
-      </div>
-
-      ${
-        data.loans.length
-        ? `
-          <div class="cards-grid">
-            ${data.loans.map(loanMiniCard).join("")}
-          </div>
-        `
-        : `
-          <div class="empty">
-            <strong>No loans added</strong>
-            Add your first loan to start tracking EMI progress.
-            <br><br>
-            <button class="primary-btn"
-              onclick="openLoanModal()">
-              + Add your first loan
-            </button>
-          </div>
-        `
-      }
-
-    </section>
-  `;
+  const cards = data.loans.map(l => {
+    const principal = number(l.principal);
+    const paid = Math.min(principal, number(l.paid));
+    const pct = principal ? paid/principal*100 : 0;
+    const remaining = Math.max(0,principal-paid);
+    const monthlyRate = number(l.rate)/1200;
+    const emi = monthlyRate === 0
+      ? (number(l.term) ? principal/number(l.term) : 0)
+      : (number(l.term) ? principal*monthlyRate*Math.pow(1+monthlyRate,number(l.term))/(Math.pow(1+monthlyRate,number(l.term))-1) : 0);
+    return `<article class="loan-card">
+      <div class="wallet-card-head"><span class="wallet-icon">↗</span><span class="pill ${remaining===0?"cyan":"purple"}">${remaining===0?"Completed":"In progress"}</span></div>
+      <h3>${esc(l.name)}</h3><p class="muted">Interest rate: ${number(l.rate)}% p.a.</p>
+      <div class="wallet-balance">${money(remaining)} <small>principal remaining</small></div>
+      <div class="progress-line"><span>Principal paid</span><strong>${Math.round(pct)}%</strong></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <div class="progress-line"><span>Recorded payments: ${money(paid)}</span><span>EMI estimate: ${money(emi)}</span></div>
+      <p class="muted tiny">Estimated EMI based on original principal, annual rate and term. Extra fees and lender rules are not included.</p>
+      <div class="inline-actions"><button class="small-btn" data-action="pay-loan" data-id="${esc(l.id)}" ${remaining===0?"disabled":""}>Record EMI payment</button><button class="small-btn" data-action="delete-loan" data-id="${esc(l.id)}">Delete</button></div>
+    </article>`;
+  }).join("");
+  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Record repayments to update your progress.</span><button class="btn btn-primary" data-action="add-loan">＋ Add loan</button></div>
+    ${cards ? `<div class="loan-grid">${cards}</div>` : emptyState("↗","Take control of repayments","Add a loan to estimate EMI and record principal repayments.","Add loan","add-loan")}`;
 }
-
-function openLoanModal() {
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Add loan</h2>
-
-    <p class="stat-meta">
-      Enter your loan details. The app will automatically calculate
-      EMI progress and outstanding payments.
-    </p>
-
-    <form onsubmit="saveLoan(event)">
-
-      <div class="form-grid">
-
-        <div class="form-group">
-          <label>Loan name</label>
-          <input name="name"
-            required
-            placeholder="e.g. Home Loan">
-        </div>
-
-        <div class="form-group">
-          <label>Lender / Bank</label>
-          <input name="lender"
-            placeholder="e.g. SBI">
-        </div>
-
-        <div class="form-group">
-          <label>Total loan amount</label>
-          <input name="principal"
-            type="number"
-            min="0"
-            step="0.01"
-            required
-            placeholder="500000">
-        </div>
-
-        <div class="form-group">
-          <label>Monthly EMI</label>
-          <input name="emi"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            placeholder="15000">
-        </div>
-
-        <div class="form-group">
-          <label>Total number of EMIs</label>
-          <input name="totalEmis"
-            type="number"
-            min="1"
-            step="1"
-            required
-            placeholder="36">
-        </div>
-
-        <div class="form-group">
-          <label>Already paid EMIs</label>
-          <input name="paidEmis"
-            type="number"
-            min="0"
-            step="1"
-            value="0">
-        </div>
-
-        <div class="form-group">
-          <label>Interest rate (%)</label>
-          <input name="interest"
-            type="number"
-            min="0"
-            step="0.01"
-            value="0">
-        </div>
-
-        <div class="form-group">
-          <label>Next EMI date</label>
-          <input name="dueDate"
-            type="date"
-            value="${today()}">
-        </div>
-
-      </div>
-
-      <div class="insight">
-        <strong>How progress works:</strong>
-        If you enter 2 paid EMIs out of 10 total EMIs,
-        the app automatically shows <strong>20%</strong> completed.
-      </div>
-
-      <div class="form-actions">
-
-        <button type="button"
-          class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn">
-          Save loan
-        </button>
-
-      </div>
-
-    </form>
-  `);
-}
-
-function saveLoan(event) {
-  event.preventDefault();
-
-  const form = new FormData(event.target);
-
-  const totalEmis =
-    Math.max(1,Math.floor(numberValue(form.get("totalEmis"))));
-
-  const paidEmis =
-    Math.min(
-      totalEmis,
-      Math.max(0,Math.floor(numberValue(form.get("paidEmis"))))
-    );
-
-  const emi = numberValue(form.get("emi"));
-
-  if (emi <= 0) {
-    showToast("Enter a valid EMI amount.","error");
-    return;
-  }
-
-  data.loans.push({
-    id: uid("loan"),
-    name: form.get("name").trim(),
-    lender: form.get("lender").trim(),
-    principal: numberValue(form.get("principal")),
-    emi,
-    totalEmis,
-    paidEmis,
-    interest: numberValue(form.get("interest")),
-    dueDate: form.get("dueDate"),
-    createdAt: new Date().toISOString(),
-    payments: []
-  });
-
-  saveData();
-  closeModalDirect();
-  showToast("Loan added successfully.");
-  navigateTo("loans");
-}
-
-function payLoanEmi(id) {
-  const loan = data.loans.find(item => item.id === id);
-
-  if (!loan) return;
-
-  if (loanRemainingEmis(loan) <= 0) {
-    showToast("This loan is already completed.","error");
-    return;
-  }
-
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Pay EMI</h2>
-
-    <div class="loan-card">
-
-      <div class="loan-title">
-        <div class="loan-icon">₹</div>
-
-        <div>
-          <h3>${escapeHTML(loan.name)}</h3>
-          <small>${escapeHTML(loan.lender || "Loan")}</small>
-        </div>
-      </div>
-
-      <div class="loan-stats">
-
-        <div class="loan-stat">
-          <small>EMI</small>
-          <strong>${money(loan.emi)}</strong>
-        </div>
-
-        <div class="loan-stat">
-          <small>Current progress</small>
-          <strong>${loanProgress(loan)}%</strong>
-        </div>
-
-        <div class="loan-stat">
-          <small>Remaining</small>
-          <strong>${loanRemainingEmis(loan)}</strong>
-        </div>
-
-      </div>
-
-      <div class="progress">
-        <div class="progress-bar"
-          style="width:${loanProgress(loan)}%">
-        </div>
-      </div>
-
-      <p class="stat-meta">
-        After this payment your progress will become
-        <strong>${Math.min(
-          100,
-          Math.round(
-            ((loan.paidEmis + 1) / loan.totalEmis) * 100
-          )
-        )}%</strong>.
-      </p>
-
-      <div class="form-actions">
-
-        <button class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn"
-          onclick="confirmLoanEmi('${loan.id}')">
-          Confirm ₹${Number(loan.emi).toLocaleString("en-IN")}
-        </button>
-
-      </div>
-
-    </div>
-  `);
-}
-
-function confirmLoanEmi(id) {
-  const loan = data.loans.find(item => item.id === id);
-
-  if (!loan || loanRemainingEmis(loan) <= 0) return;
-
-  loan.paidEmis++;
-
-  if (!Array.isArray(loan.payments)) {
-    loan.payments = [];
-  }
-
-  loan.payments.push({
-    id: uid("emi"),
-    amount: loan.emi,
-    date: today()
-  });
-
-  saveData();
-  closeModalDirect();
-
-  if (loan.paidEmis >= loan.totalEmis) {
-    showToast("🎉 Loan fully completed!");
-  } else {
-    showToast(
-      `EMI paid. Loan is now ${loanProgress(loan)}% complete.`
-    );
-  }
-
-  render();
-}
-
-/* =========================================================
-   RECURRING
-   ========================================================= */
 
 function renderRecurring() {
-  return `
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Recurring payments</h3>
-          <p>Keep track of subscriptions and regular bills</p>
-        </div>
-
-        <button class="primary-btn"
-          onclick="openRecurringModal()">
-          + Add payment
-        </button>
-      </div>
-
-      ${
-        data.recurring.length
-        ? `
-          <div class="cards-grid">
-            ${data.recurring.map(item => `
-              <div class="goal-card">
-
-                <div class="goal-top">
-                  <div class="category-icon">↻</div>
-
-                  <button class="danger-btn"
-                    onclick="deleteRecurring('${item.id}')">
-                    Delete
-                  </button>
-                </div>
-
-                <h3>${escapeHTML(item.name)}</h3>
-
-                <small>${escapeHTML(item.frequency)}</small>
-
-                <div class="card-amount">
-                  ${money(item.amount)}
-                </div>
-
-                <small>
-                  Next payment:
-                  ${escapeHTML(item.nextDate)}
-                </small>
-
-                <button
-                  class="secondary-btn"
-                  style="width:100%;margin-top:15px"
-                  onclick="markRecurringPaid('${item.id}')">
-                  Mark as paid
-                </button>
-
-              </div>
-            `).join("")}
-          </div>
-        `
-        : `
-          <div class="empty">
-            <strong>No recurring payments</strong>
-            Add subscriptions, EMIs or monthly bills.
-          </div>
-        `
-      }
-
-    </section>
-  `;
+  const list = data.recurring.map(r => `<tr>
+    <td><div class="item-main"><span class="item-icon">⟳</span><div><strong>${esc(r.name)}</strong><small>${esc(r.category)}</small></div></div></td>
+    <td>${money(r.amount)}</td><td>${esc(r.frequency)}</td><td>${esc(r.nextDate || "Not set")}</td>
+    <td><button class="small-btn" data-action="record-recurring" data-id="${esc(r.id)}">Record expense</button> <button class="small-btn" data-action="delete-recurring" data-id="${esc(r.id)}">Delete</button></td>
+  </tr>`).join("");
+  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Manage recurring items manually. Browser notifications are not enabled.</span><button class="btn btn-primary" data-action="add-recurring">＋ Add recurring</button></div>
+    ${list ? panel("Recurring payments","Use Record expense when a payment occurs.",`<div class="table-wrap"><table><thead><tr><th>ITEM</th><th>AMOUNT</th><th>FREQUENCY</th><th>NEXT DATE</th><th>ACTIONS</th></tr></thead><tbody>${list}</tbody></table></div>`) : emptyState("⟳","No recurring items","Track subscriptions, bills and regular expenses.","Add recurring","add-recurring")}`;
 }
-
-function openRecurringModal() {
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Add recurring payment</h2>
-
-    <form onsubmit="saveRecurring(event)">
-
-      <div class="form-group">
-        <label>Payment name</label>
-        <input name="name"
-          required
-          placeholder="e.g. Internet bill">
-      </div>
-
-      <div class="form-group">
-        <label>Amount</label>
-        <input name="amount"
-          type="number"
-          min="0.01"
-          required>
-      </div>
-
-      <div class="form-group">
-        <label>Frequency</label>
-
-        <select name="frequency">
-          <option>Weekly</option>
-          <option>Monthly</option>
-          <option>Yearly</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label>Next payment date</label>
-        <input name="nextDate"
-          type="date"
-          value="${today()}"
-          required>
-      </div>
-
-      <div class="form-actions">
-
-        <button type="button"
-          class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn">
-          Save payment
-        </button>
-
-      </div>
-
-    </form>
-  `);
-}
-
-function saveRecurring(event) {
-  event.preventDefault();
-
-  const form = new FormData(event.target);
-
-  data.recurring.push({
-    id: uid("recurring"),
-    name: form.get("name").trim(),
-    amount: numberValue(form.get("amount")),
-    frequency: form.get("frequency"),
-    nextDate: form.get("nextDate")
-  });
-
-  saveData();
-  closeModalDirect();
-  showToast("Recurring payment added.");
-  render();
-}
-
-function markRecurringPaid(id) {
-  const item = data.recurring.find(
-    payment => payment.id === id
-  );
-
-  if (!item) return;
-
-  const date = new Date(item.nextDate);
-
-  if (item.frequency === "Weekly") {
-    date.setDate(date.getDate()+7);
-  }
-
-  if (item.frequency === "Monthly") {
-    date.setMonth(date.getMonth()+1);
-  }
-
-  if (item.frequency === "Yearly") {
-    date.setFullYear(date.getFullYear()+1);
-  }
-
-  item.nextDate =
-    date.toISOString().slice(0,10);
-
-  saveData();
-
-  showToast(
-    "Payment marked as paid. Next date updated."
-  );
-
-  render();
-}
-
-function deleteRecurring(id) {
-  data.recurring =
-    data.recurring.filter(item => item.id !== id);
-
-  saveData();
-  showToast("Recurring payment deleted.");
-  render();
-}
-
-/* =========================================================
-   RECEIPTS
-   ========================================================= */
 
 function renderReceipts() {
-  return `
+  const list = data.receipts.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.category)}</td><td>${money(r.amount)}</td><td>${esc(r.date)}</td></tr>`).join("");
+  return `<div class="grid grid-2">
     <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Receipt scanner</h3>
-          <p>Upload a bill image and record the expense</p>
+      <div class="panel-head"><div><h3>Receipt workspace</h3><p>Choose a receipt photo and review its details.</p></div><span class="feature-icon">▤</span></div>
+      <label class="file-drop" for="receiptFile"><span class="feature-icon">↑</span><strong>Select a receipt image</strong><p>JPG, PNG or another image supported by your browser</p><span class="btn btn-secondary">Choose image</span></label>
+      <input class="hidden" id="receiptFile" type="file" accept="image/*">
+      <img id="receiptPreview" class="receipt-preview hidden" alt="Selected receipt preview">
+      <div class="notice">Selecting a photo does not automatically extract text in this version. Enter the amount and category below to save an accurate record.</div>
+      <form id="receiptForm">
+        <div class="form-group"><label>Merchant or receipt name</label><input id="receiptName" required maxlength="100" placeholder="e.g. Grocery store"></div>
+        <div class="form-row">
+          <div class="form-group"><label>Amount (₹)</label><input id="receiptAmount" type="number" min=".01" step=".01" required placeholder="0.00"></div>
+          <div class="form-group"><label>Category</label><select id="receiptCategory"><option>Food</option><option>Transport</option><option>Shopping</option><option>Bills</option><option>Health</option><option>Education</option><option>Other</option></select></div>
         </div>
-
-        <span class="badge">
-          MANUAL CONFIRMATION
-        </span>
-      </div>
-
-      <div class="upload-zone">
-
-        <strong>Upload receipt image</strong>
-
-        <p>Select a receipt from your device.</p>
-
-        <br>
-
-        <input type="file"
-          accept="image/*"
-          onchange="previewReceipt(event)">
-
-        <div id="receipt-preview-area"></div>
-
-      </div>
-
-      <div class="insight"
-        style="margin-top:20px">
-
-        <strong>Receipt system:</strong>
-        This offline edition stores the receipt image locally.
-        Automatic OCR requires an OCR service or native Android
-        integration.
-
-      </div>
-
-      <button class="primary-btn"
-        onclick="openReceiptEntryModal()"
-        style="margin-top:10px">
-        Enter receipt details
-      </button>
-
+        <div class="form-group"><label>Date</label><input id="receiptDate" type="date" value="${today()}" required></div>
+        <button class="btn btn-primary full" type="submit">Save receipt and expense</button>
+      </form>
     </section>
-  `;
+    <section>${panel("Receipt history","Saved receipts",list ? `<div class="table-wrap"><table><thead><tr><th>NAME</th><th>CATEGORY</th><th>AMOUNT</th><th>DATE</th></tr></thead><tbody>${list}</tbody></table></div>` : emptyState("▤","No receipts saved","Your saved receipts will appear here."))}</section>
+  </div>`;
 }
-
-function previewReceipt(event) {
-  const file = event.target.files[0];
-
-  if (!file) return;
-
-  const reader = new FileReader();
-
-  reader.onload = function(e) {
-    receiptImage = e.target.result;
-
-    document.getElementById(
-      "receipt-preview-area"
-    ).innerHTML = `
-      <img
-        class="receipt-preview"
-        src="${receiptImage}"
-        alt="Receipt preview">
-
-      <p>Receipt loaded successfully.</p>
-    `;
-  };
-
-  reader.readAsDataURL(file);
-}
-
-function openReceiptEntryModal() {
-  const walletOptions =
-    data.wallets.map(wallet =>
-      `<option value="${wallet.id}">
-        ${escapeHTML(wallet.name)}
-      </option>`
-    ).join("");
-
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <h2>Record receipt expense</h2>
-
-    <form onsubmit="saveReceiptExpense(event)">
-
-      <div class="form-group">
-        <label>Merchant name</label>
-        <input name="description"
-          required
-          placeholder="e.g. Supermarket">
-      </div>
-
-      <div class="form-group">
-        <label>Total amount</label>
-        <input name="amount"
-          type="number"
-          min="0.01"
-          step="0.01"
-          required>
-      </div>
-
-      <div class="form-group">
-        <label>Category</label>
-
-        <select name="category">
-          ${categories.map(category =>
-            `<option>${category}</option>`
-          ).join("")}
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label>Wallet</label>
-
-        <select name="walletId">
-          ${walletOptions}
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label>Date</label>
-        <input name="date"
-          type="date"
-          value="${today()}">
-      </div>
-
-      <div class="form-actions">
-
-        <button type="button"
-          class="secondary-btn"
-          onclick="closeModalDirect()">
-          Cancel
-        </button>
-
-        <button class="primary-btn">
-          Record expense
-        </button>
-
-      </div>
-
-    </form>
-  `);
-}
-
-function saveReceiptExpense(event) {
-  event.preventDefault();
-
-  const form = new FormData(event.target);
-
-  data.transactions.push({
-    id: uid("receipt"),
-    type: "expense",
-    amount: numberValue(form.get("amount")),
-    description: form.get("description").trim(),
-    category: form.get("category"),
-    walletId: form.get("walletId"),
-    date: form.get("date"),
-    notes: "Added through receipt scanner",
-    receiptImage,
-    createdAt: new Date().toISOString()
-  });
-
-  saveData();
-  closeModalDirect();
-
-  showToast("Receipt expense saved.");
-  render();
-}
-
-/* =========================================================
-   ANALYTICS
-   ========================================================= */
 
 function renderAnalytics() {
-  const expenses =
-    data.transactions.filter(item => item.type === "expense");
-
-  const largest = expenses.length
-    ? Math.max(...expenses.map(item => item.amount))
-    : 0;
-
-  const average = expenses.length
-    ? expenses.reduce((sum,item) =>
-        sum + numberValue(item.amount),0
-      ) / expenses.length
-    : 0;
-
-  const t = totals();
-
-  const savingRate =
-    t.income
-      ? ((t.net / t.income) * 100).toFixed(1)
-      : 0;
-
-  return `
-    <section class="stats-grid">
-
-      ${statCard(
-        "AVERAGE EXPENSE",
-        average,
-        "expense",
-        "Per expense transaction"
-      )}
-
-      ${statCard(
-        "LARGEST EXPENSE",
-        largest,
-        "expense",
-        "Highest recorded expense"
-      )}
-
-      <div class="stat-card">
-        <div class="stat-label">SAVINGS RATE</div>
-        <div class="stat-value income">${savingRate}%</div>
-        <div class="stat-meta">Based on total income</div>
-      </div>
-
-      <div class="stat-card">
-        <div class="stat-label">TRANSACTIONS</div>
-        <div class="stat-value neutral">
-          ${data.transactions.length}
-        </div>
-        <div class="stat-meta">Total recorded entries</div>
-      </div>
-
-    </section>
-
-    <div class="dashboard-grid">
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>Category analysis</h3>
-            <p>Total expenses by category</p>
-          </div>
-        </div>
-
-        <div class="chart-box">
-          <canvas id="category-chart"></canvas>
-        </div>
-      </section>
-
-      <section class="panel">
-
-        <div class="panel-header">
-          <div>
-            <h3>Analysis notes</h3>
-            <p>Based on your stored transactions</p>
-          </div>
-        </div>
-
-        ${generateInsights()}
-
-      </section>
-
-    </div>
-  `;
-}
-
-function generateInsights() {
-  const t = totals();
-  const month = monthlyTotals();
-
-  const expenseTransactions =
-    data.transactions.filter(t => t.type === "expense");
-
-  if (!data.transactions.length) {
-    return `
-      <div class="insight">
-        <strong>Welcome!</strong><br>
-        Add transactions to receive automatic financial observations.
-      </div>
-    `;
-  }
-
-  const categoryTotals = {};
-
-  expenseTransactions.forEach(transaction => {
-    categoryTotals[transaction.category] =
-      (categoryTotals[transaction.category] || 0) +
-      numberValue(transaction.amount);
-  });
-
-  const biggestCategory =
-    Object.entries(categoryTotals)
-      .sort((a,b) => b[1]-a[1])[0];
-
-  const insights = [];
-
-  if (t.net > 0) {
-    insights.push(
-      `Your overall net position is positive by
-      <strong>${money(t.net)}</strong>.`
-    );
-  } else {
-    insights.push(
-      `Your expenses exceed your income by
-      <strong>${money(Math.abs(t.net))}</strong>.`
-    );
-  }
-
-  if (biggestCategory) {
-    insights.push(
-      `Your highest spending category is
-      <strong>${escapeHTML(biggestCategory[0])}</strong>
-      at <strong>${money(biggestCategory[1])}</strong>.`
-    );
-  }
-
-  if (month.income > 0) {
-    const rate =
-      Math.round(
-        ((month.income-month.expenses)/month.income)*100
-      );
-
-    insights.push(
-      `Your current monthly savings rate is approximately
-      <strong>${rate}%</strong>.`
-    );
-  }
-
-  if (data.goals.length) {
-    const nearest = data.goals[0];
-
-    insights.push(
-      `Your active goal
-      <strong>${escapeHTML(nearest.name)}</strong>
-      is ${Math.round(
-        (nearest.saved/nearest.target)*100
-      )}% complete.`
-    );
-  }
-
-  if (data.loans.length) {
-    const active = data.loans.filter(
-      l => loanRemainingEmis(l) > 0
-    );
-
-    if (active.length) {
-      insights.push(
-        `You currently have
-        <strong>${active.length}</strong>
-        active loan${active.length > 1 ? "s":""}.`
-      );
-    }
-  }
-
-  return insights
-    .map(text => `<div class="insight">${text}</div>`)
-    .join("");
-}
-
-/* =========================================================
-   CHARTS
-   ========================================================= */
-
-function drawDashboardCharts() {
-  if (typeof Chart === "undefined") return;
-
-  const monthly = {};
-
-  data.transactions.forEach(transaction => {
-    const month = transaction.date.slice(0,7);
-
-    if (!monthly[month]) {
-      monthly[month] = {
-        income: 0,
-        expense: 0
-      };
-    }
-
-    if (transaction.type === "income") {
-      monthly[month].income += numberValue(transaction.amount);
-    }
-
-    if (transaction.type === "expense") {
-      monthly[month].expense += numberValue(transaction.amount);
-    }
-  });
-
-  const labels =
-    Object.keys(monthly).sort().slice(-6);
-
-  const incomeData =
-    labels.map(label => monthly[label].income);
-
-  const expenseData =
-    labels.map(label => monthly[label].expense);
-
-  if (trendChart) trendChart.destroy();
-
-  const trendCanvas =
-    document.getElementById("trend-chart");
-
-  if (!trendCanvas) return;
-
-  trendChart = new Chart(trendCanvas,{
-    type:"line",
-
-    data:{
-      labels: labels.length ? labels:["No data"],
-
-      datasets:[
-        {
-          label:"Income",
-          data:labels.length ? incomeData:[0],
-          borderColor:"#55e6a5",
-          backgroundColor:"rgba(85,230,165,.1)",
-          fill:true,
-          tension:.35
-        },
-
-        {
-          label:"Expenses",
-          data:labels.length ? expenseData:[0],
-          borderColor:"#ff718d",
-          backgroundColor:"rgba(255,113,141,.1)",
-          fill:true,
-          tension:.35
-        }
-      ]
-    },
-
-    options:chartOptions()
-  });
-
-  const categoryTotals = {};
-
-  data.transactions
-    .filter(t => t.type === "expense")
-    .forEach(transaction => {
-      categoryTotals[transaction.category] =
-        (categoryTotals[transaction.category] || 0) +
-        numberValue(transaction.amount);
+  const all = totals();
+  const m = monthTotals();
+  const cats = categorySpending(monthTransactions());
+  const top = cats.length ? cats.map((c,i) => {
+    const pct = m.expenses ? c[1]/m.expenses*100 : 0;
+    return `<div class="category-row"><span>${esc(c[0])}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${chartColors[i%chartColors.length]}"></div></div><strong>${money(c[1])}</strong></div>`;
+  }).join("") : emptyState("⌁","Waiting for activity","Add expenses to see category analysis.");
+  const recentMonths = [];
+  for(let i=5;i>=0;i--){
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth()-i);
+    const key = d.toISOString().slice(0,7);
+    const tx = data.transactions.filter(t => String(t.date).startsWith(key));
+    recentMonths.push({
+      label:d.toLocaleString("en-IN",{month:"short"}),
+      income:sum(tx.filter(t=>t.type==="income"),t=>t.amount),
+      expense:sum(tx.filter(t=>t.type==="expense"),t=>t.amount)
     });
+  }
+  const max = Math.max(1,...recentMonths.flatMap(x=>[x.income,x.expense]));
+  const bars = recentMonths.map(mo=>`<div style="flex:1;min-width:0;text-align:center">
+    <div style="height:145px;display:flex;align-items:flex-end;justify-content:center;gap:4px;padding:0 2px">
+      <div title="Income ${money(mo.income)}" style="height:${mo.income/max*100}%;width:35%;min-height:${mo.income?3:0}px;border-radius:5px 5px 0 0;background:var(--cyan)"></div>
+      <div title="Expenses ${money(mo.expense)}" style="height:${mo.expense/max*100}%;width:35%;min-height:${mo.expense?3:0}px;border-radius:5px 5px 0 0;background:var(--purple)"></div>
+    </div><small>${mo.label}</small></div>`).join("");
 
-  const categoryLabels =
-    Object.keys(categoryTotals);
-
-  const categoryValues =
-    Object.values(categoryTotals);
-
-  if (expenseChart) expenseChart.destroy();
-
-  const expenseCanvas =
-    document.getElementById("expense-chart");
-
-  if (!expenseCanvas) return;
-
-  expenseChart = new Chart(expenseCanvas,{
-    type:"doughnut",
-
-    data:{
-      labels:
-        categoryLabels.length
-        ? categoryLabels
-        : ["No expenses"],
-
-      datasets:[
-        {
-          data:
-            categoryValues.length
-            ? categoryValues
-            : [1],
-
-          backgroundColor:[
-            "#55e6ff",
-            "#a98bff",
-            "#55e6a5",
-            "#ff718d",
-            "#ffd166",
-            "#66b9ff",
-            "#ff9f68",
-            "#d4a5ff"
-          ],
-
-          borderWidth:0
-        }
-      ]
-    },
-
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-
-      plugins:{
-        legend:{
-          labels:{
-            color:getComputedStyle(document.body).color
-          }
-        }
-      }
-    }
-  });
+  return `<div class="grid grid-3">
+    ${stat("All-time income",money(all.income),"↙","#63edb0","Recorded income")}
+    ${stat("All-time expenses",money(all.expenses),"↗","#ff7895","Recorded expenses")}
+    ${stat("This month's net",money(m.income-m.expenses),"⌁","#9a7cff","Income minus expenses")}
+  </div>
+  <div class="grid grid-2 section-gap">
+    ${panel("Income vs expenses","Six-month view · recorded data only",`
+      <div class="inline-actions" style="margin-bottom:15px"><span class="pill cyan">● Income</span><span class="pill purple">● Expenses</span></div>
+      <div style="display:flex;align-items:flex-end;gap:10px;padding-top:10px">${bars}</div>`)}
+    ${panel("Where money goes","Current month's expense categories",top)}
+  </div>
+  <div class="notice section-gap">Analytics are based only on the records saved in this browser. FINOVA does not retrieve transactions from your bank.</div>`;
 }
-
-function drawAnalyticsCharts() {
-  if (typeof Chart === "undefined") return;
-
-  const categoryTotals = {};
-
-  data.transactions
-    .filter(t => t.type === "expense")
-    .forEach(transaction => {
-      categoryTotals[transaction.category] =
-        (categoryTotals[transaction.category] || 0) +
-        numberValue(transaction.amount);
-    });
-
-  if (categoryChart) categoryChart.destroy();
-
-  const canvas =
-    document.getElementById("category-chart");
-
-  if (!canvas) return;
-
-  categoryChart = new Chart(canvas,{
-    type:"bar",
-
-    data:{
-      labels:Object.keys(categoryTotals),
-
-      datasets:[
-        {
-          label:"Expenses",
-          data:Object.values(categoryTotals),
-          backgroundColor:"#a98bff",
-          borderRadius:8
-        }
-      ]
-    },
-
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-
-      scales:{
-        x:{
-          ticks:{color:"#8d9ab3"},
-          grid:{display:false}
-        },
-
-        y:{
-          ticks:{color:"#8d9ab3"},
-          grid:{
-            color:"rgba(141,154,179,.12)"
-          }
-        }
-      }
-    }
-  });
-}
-
-function chartOptions() {
-  return {
-    responsive:true,
-    maintainAspectRatio:false,
-
-    interaction:{
-      mode:"index",
-      intersect:false
-    },
-
-    scales:{
-      x:{
-        ticks:{color:"#8d9ab3"},
-        grid:{display:false}
-      },
-
-      y:{
-        ticks:{color:"#8d9ab3"},
-        grid:{
-          color:"rgba(141,154,179,.12)"
-        }
-      }
-    },
-
-    plugins:{
-      legend:{
-        labels:{
-          color:getComputedStyle(document.body).color
-        }
-      }
-    }
-  };
-}
-
-/* =========================================================
-   REPORTS
-   ========================================================= */
 
 function renderReports() {
-  const t = totals();
+  return `<div class="grid grid-2">
+    <section class="panel"><div class="feature-icon">▧</div><h3 style="margin-top:15px">Transaction report</h3><p class="muted">Download your recorded transactions in spreadsheet-friendly CSV format.</p><button class="btn btn-primary full" data-action="export-csv">Export CSV</button></section>
+    <section class="panel"><div class="feature-icon">⬇</div><h3 style="margin-top:15px">Full data backup</h3><p class="muted">Export a JSON copy of your profile, transactions, wallets, goals, loans and settings.</p><button class="btn btn-primary full" data-action="export-json">Download backup</button></section>
+    <section class="panel"><div class="feature-icon">▣</div><h3 style="margin-top:15px">Import backup</h3><p class="muted">Restore a FINOVA JSON backup from a file. This replaces current saved data.</p><input id="backupFile" type="file" accept=".json,application/json"><button class="btn btn-secondary full" style="margin-top:12px" data-action="import-json">Restore selected backup</button></section>
+    <section class="panel"><div class="feature-icon">◉</div><h3 style="margin-top:15px">Quick summary</h3><div class="progress-line"><span>Transactions</span><strong>${data.transactions.length}</strong></div><div class="progress-line"><span>Wallets</span><strong>${data.wallets.length}</strong></div><div class="progress-line"><span>Goals</span><strong>${data.goals.length}</strong></div><div class="progress-line"><span>Loans</span><strong>${data.loans.length}</strong></div></section>
+  </div>
+  <div class="notice section-gap">CSV and JSON exports are generated on your device. Keep backup files private because they can contain your personal financial records.</div>`;
+}
 
-  return `
-    <section class="panel">
+function renderPro() {
+  const features = [
+    "Expanded financial insights and comparisons",
+    "Downloadable reports and data exports",
+    "Advanced budget and goal analysis",
+    "Loan and EMI tracking tools",
+    "Receipt history and finance organisation",
+    "Future premium features as they are implemented"
+  ];
+  return `<section class="hero-panel">
+    <span class="eyebrow">FINOVA PRO · PREMIUM EXPERIENCE</span>
+    <h2>Make every rupee<br><span class="gradient-text">work smarter.</span></h2>
+    <p>Explore the premium plan for people who want a more detailed view of their finances.</p>
+    <span class="pill purple">✦ PREMIUM MEMBERSHIP</span>
+  </section>
+  <div class="price-grid section-gap">
+    <article class="price-card">
+      <span class="eyebrow">MONTHLY PLAN</span><div class="price">₹99<small> / month</small></div>
+      <p class="muted">Flexible monthly pricing.</p>
+      <ul class="check-list">${features.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>
+      <button class="btn btn-secondary full" data-action="pro-checkout">Choose monthly · ₹99</button>
+    </article>
+    <article class="price-card featured">
+      <span class="pill purple">ANNUAL PLAN</span><div class="price">₹1,169<small> / year</small></div>
+      <p class="muted">An annual subscription option.</p>
+      <ul class="check-list">${features.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>
+      <button class="btn btn-pro full" data-action="pro-checkout">Choose annual · ₹1,169</button>
+    </article>
+  </div>
+  <div class="notice section-gap"><strong>Payment setup required:</strong> These are displayed prices, not a completed purchase. Real subscriptions require a secure payment provider or Google Play Billing, purchase verification, and subscription management. This demo does not collect card details or unlock Pro through a fake payment.</div>
+  <div class="section-gap">${panel("Your current membership","Membership status",`<div class="progress-line"><span>Current plan</span><strong>${data.pro?"FINOVA PRO":"FREE"}</strong></div><p class="muted tiny">Pro is not activated by this demo checkout. Do not advertise a paid subscription as live until billing is integrated and tested.</p>`)}</div>`;
+}
 
-      <div class="panel-header">
-        <div>
-          <h3>Financial reports</h3>
-          <p>Export and print your finance data</p>
-        </div>
-      </div>
-
-      <div class="report-grid">
-
-        <div class="report-option">
-          <h3>CSV transaction report</h3>
-          <p>
-            Export all transactions into a spreadsheet-compatible CSV.
-          </p>
-
-          <button class="primary-btn"
-            onclick="exportCSV()">
-            Export CSV
-          </button>
-        </div>
-
-        <div class="report-option">
-          <h3>Printable financial summary</h3>
-          <p>
-            Open a print-friendly summary.
-          </p>
-
-          <button class="primary-btn"
-            onclick="printSummary()">
-            Print summary
-          </button>
-        </div>
-
-        <div class="report-option">
-          <h3>Current balance</h3>
-          <p>Total balance across all wallets.</p>
-          <h2 class="neutral">${money(t.balance)}</h2>
-        </div>
-
-        <div class="report-option">
-          <h3>Transaction count</h3>
-          <p>Total number of financial entries.</p>
-          <h2 class="neutral">${data.transactions.length}</h2>
-        </div>
-
-      </div>
-
+function renderSettings() {
+  return `<div class="grid grid-2">
+    <section class="panel"><div class="panel-head"><div><h3>Your profile</h3><p>Basic information saved on this device.</p></div><span class="feature-icon">♙</span></div>
+      <div class="settings-row"><div><strong>Name</strong><p>${esc(data.profile?.name || "Not set")}</p></div><button class="small-btn" data-action="edit-profile">Edit</button></div>
+      <div class="settings-row"><div><strong>Age</strong><p>${esc(data.profile?.age ?? "Not set")}</p></div><button class="small-btn" data-action="edit-profile">Edit</button></div>
     </section>
-  `;
+    <section class="panel"><div class="panel-head"><div><h3>Storage and privacy</h3><p>Understand where your information lives.</p></div><span class="feature-icon">⌑</span></div>
+      <div class="settings-row"><div><strong>Storage mode</strong><p>Local browser storage on this device</p></div><span class="pill cyan">LOCAL</span></div>
+      <div class="settings-row"><div><strong>Cloud synchronisation</strong><p>Not configured in this version</p></div><span class="pill">OFF</span></div>
+      <div class="settings-row"><div><strong>Export your data</strong><p>Save a backup before clearing browser data.</p></div><button class="small-btn" data-page="reports">Open reports</button></div>
+    </section>
+    <section class="panel"><h3>App information</h3><p class="muted">FINOVA is a personal finance tracking demo. It does not offer bank services, investment execution or financial advice.</p><div class="pill">VERSION 1.0 · BROWSER EDITION</div></section>
+    <section class="panel"><h3>Danger zone</h3><p class="muted">This removes locally stored transactions and settings. Export a backup first if you want to keep them.</p><button class="btn btn-danger" data-action="reset-data">Reset all local data</button></section>
+  </div>`;
+}
+
+/* ---------- Onboarding ---------- */
+
+function showOnboarding() {
+  $("onboarding").classList.remove("hidden");
+  $("app").classList.add("hidden");
+  $("welcomeStep").classList.remove("hidden");
+  $("policyStep").classList.add("hidden");
+  $("profileName").value = data.profile?.name || "";
+  $("profileAge").value = data.profile?.age || "";
+}
+
+function showApp() {
+  $("onboarding").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  updateProfile();
+  setPage("dashboard");
+}
+
+$("welcomeContinue").addEventListener("click", () => {
+  const name = $("profileName").value.trim();
+  const age = Number($("profileAge").value);
+  if (!name) return notify("Enter your name to continue.");
+  if (!Number.isInteger(age) || age < 1 || age > 120) return notify("Enter a valid age.");
+  data.profile = { name, age };
+  saveData();
+  $("welcomeStep").classList.add("hidden");
+  $("policyStep").classList.remove("hidden");
+});
+
+$("backWelcome").addEventListener("click", () => {
+  $("policyStep").classList.add("hidden");
+  $("welcomeStep").classList.remove("hidden");
+});
+
+$("enterApp").addEventListener("click", () => {
+  if (!$("policyConsent").checked) return notify("Please confirm that you have read the information.");
+  data.policyAccepted = true;
+  saveData();
+  showApp();
+});
+
+$("logoutBtn").addEventListener("click", () => {
+  if (confirm("Return to the welcome screen? Your saved data will remain on this device.")) showOnboarding();
+});
+
+/* ---------- Transactions ---------- */
+
+function openTransaction() {
+  $("txDate").value = today();
+  $("txAmount").value = "";
+  $("txTitle").value = "";
+  $("txType").value = "expense";
+  $("txCategory").value = "Food";
+  $("txWallet").innerHTML = walletOptions(data.wallets[0]?.id);
+  $("transactionDialog").showModal();
+}
+
+$("transactionForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const amount = Number($("txAmount").value);
+  const title = $("txTitle").value.trim();
+  const walletId = $("txWallet").value;
+  if (!title || !Number.isFinite(amount) || amount <= 0 || !walletId) return notify("Check the transaction details.");
+  const wallet = data.wallets.find(w=>w.id===walletId);
+  if (!wallet) return notify("Select a valid wallet.");
+  if (wallet.frozen) return notify("This demo wallet is frozen. Unfreeze it before adding a transaction.");
+
+  data.transactions.push({
+    id: uid(), type: $("txType").value, amount, title,
+    category: $("txCategory").value, date: $("txDate").value || today(),
+    walletId
+  });
+  saveData();
+  $("transactionDialog").close();
+  renderPage();
+  notify("Transaction saved.");
+});
+
+/* ---------- Generic add/edit dialogs ---------- */
+
+function field(label, name, type="text", options={}) {
+  const required = options.required === false ? "" : "required";
+  if (type === "select") {
+    return `<div class="form-group"><label>${esc(label)}</label><select name="${esc(name)}" ${required}>${options.values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("")}</select></div>`;
+  }
+  return `<div class="form-group"><label>${esc(label)}</label><input name="${esc(name)}" type="${esc(type)}" ${required}
+    ${options.min !== undefined ? `min="${options.min}"` : ""}
+    ${options.step ? `step="${options.step}"` : ""}
+    ${options.maxlength ? `maxlength="${options.maxlength}"` : ""}
+    placeholder="${esc(options.placeholder || "")}"></div>`;
+}
+
+function openGeneric(config) {
+  genericConfig = config;
+  $("genericEyebrow").textContent = config.eyebrow || "FINOVA";
+  $("genericTitle").textContent = config.title;
+  $("genericFields").innerHTML = config.fields.map(f => field(f.label,f.name,f.type,f.options || {})).join("");
+  $("genericDialog").showModal();
+}
+
+$("genericForm").addEventListener("submit", e => {
+  e.preventDefault();
+  if (!genericConfig) return;
+  const fd = new FormData(e.currentTarget);
+  const values = Object.fromEntries(fd.entries());
+  genericConfig.save(values);
+  $("genericDialog").close();
+  genericConfig = null;
+  saveData();
+  renderPage();
+});
+
+function addWallet() {
+  openGeneric({
+    title:"Add wallet", eyebrow:"WALLETS",
+    fields:[
+      {label:"Wallet name",name:"name",options:{maxlength:45,placeholder:"e.g. Savings wallet"}},
+      {label:"Wallet type",name:"type",type:"select",options:{values:["Cash","Savings","Current","Other"]}},
+      {label:"Opening balance (₹)",name:"opening",type:"number",options:{min:0,step:"0.01"}},
+      {label:"Card colour",name:"theme",type:"select",options:{values:["card-dark","card-cyan","card-pink"]}}
+    ],
+    save:v=>{
+      data.wallets.push({id:uid(),name:v.name.trim(),type:v.type,opening:number(v.opening),frozen:false,theme:v.theme});
+      notify("Wallet added.");
+    }
+  });
+}
+
+function addBudget() {
+  openGeneric({
+    title:"Create budget",eyebrow:"BUDGET PLANNER",
+    fields:[
+      {label:"Category",name:"category",type:"select",options:{values:["Food","Transport","Shopping","Bills","Entertainment","Health","Education","Rent","Travel","Other"]}},
+      {label:"Monthly limit (₹)",name:"limit",type:"number",options:{min:0.01,step:"0.01"}}
+    ],
+    save:v=>{
+      if(data.budgets.some(b=>b.category===v.category)) { notify("A budget for this category already exists."); return; }
+      data.budgets.push({id:uid(),category:v.category,limit:number(v.limit)});
+      notify("Budget created.");
+    }
+  });
+}
+
+function addGoal() {
+  openGeneric({
+    title:"Create savings goal",eyebrow:"SAVINGS",
+    fields:[
+      {label:"Goal name",name:"name",options:{maxlength:60,placeholder:"e.g. New laptop"}},
+      {label:"Target amount (₹)",name:"target",type:"number",options:{min:0.01,step:"0.01"}},
+      {label:"Already saved (₹)",name:"saved",type:"number",options:{min:0,step:"0.01"}},
+      {label:"Emoji",name:"emoji",options:{maxlength:4,placeholder:"◎"}},
+      {label:"Target date (optional)",name:"deadline",type:"date",options:{required:false}}
+    ],
+    save:v=>{
+      data.goals.push({id:uid(),name:v.name.trim(),target:number(v.target),saved:number(v.saved),emoji:v.emoji||"◎",deadline:v.deadline});
+      notify("Savings goal created.");
+    }
+  });
+}
+
+function addLoan() {
+  openGeneric({
+    title:"Add loan",eyebrow:"LOAN TRACKER",
+    fields:[
+      {label:"Loan name",name:"name",options:{maxlength:60,placeholder:"e.g. Education loan"}},
+      {label:"Original principal (₹)",name:"principal",type:"number",options:{min:0.01,step:"0.01"}},
+      {label:"Annual interest rate (%)",name:"rate",type:"number",options:{min:0,step:"0.01"}},
+      {label:"Term in months",name:"term",type:"number",options:{min:1,step:"1"}}
+    ],
+    save:v=>{
+      data.loans.push({id:uid(),name:v.name.trim(),principal:number(v.principal),paid:0,rate:number(v.rate),term:Math.max(1,Math.floor(number(v.term)))});
+      notify("Loan added.");
+    }
+  });
+}
+
+function addRecurring() {
+  openGeneric({
+    title:"Add recurring payment",eyebrow:"RECURRING",
+    fields:[
+      {label:"Payment name",name:"name",options:{maxlength:60,placeholder:"e.g. Internet bill"}},
+      {label:"Amount (₹)",name:"amount",type:"number",options:{min:0.01,step:"0.01"}},
+      {label:"Category",name:"category",type:"select",options:{values:["Food","Transport","Shopping","Bills","Entertainment","Health","Education","Rent","Other"]}},
+      {label:"Frequency",name:"frequency",type:"select",options:{values:["Weekly","Monthly","Quarterly","Yearly"]}},
+      {label:"Next payment date",name:"nextDate",type:"date"}
+    ],
+    save:v=>{
+      data.recurring.push({id:uid(),name:v.name.trim(),amount:number(v.amount),category:v.category,frequency:v.frequency,nextDate:v.nextDate});
+      notify("Recurring item saved.");
+    }
+  });
+}
+
+/* ---------- Actions ---------- */
+
+document.addEventListener("click", e => {
+  const pageBtn = e.target.closest("[data-page]");
+  if (pageBtn) {
+    e.preventDefault();
+    setPage(pageBtn.dataset.page);
+    return;
+  }
+
+  const closeBtn = e.target.closest("[data-close]");
+  if (closeBtn) {
+    $(closeBtn.dataset.close)?.close();
+    return;
+  }
+
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+
+  const id = btn.dataset.id;
+  const action = btn.dataset.action;
+
+  switch(action) {
+    case "add-transaction": openTransaction(); break;
+    case "add-wallet": addWallet(); break;
+    case "add-budget": addBudget(); break;
+    case "add-goal": addGoal(); break;
+    case "add-loan": addLoan(); break;
+    case "add-recurring": addRecurring(); break;
+
+    case "delete-tx":
+      if(confirm("Delete this transaction? The wallet balance will be recalculated.")) {
+        data.transactions = data.transactions.filter(t=>t.id!==id);
+        saveData(); renderPage(); notify("Transaction deleted.");
+      }
+      break;
+
+    case "toggle-wallet": {
+      const w=data.wallets.find(w=>w.id===id);
+      if(w) { w.frozen=!w.frozen; saveData(); renderPage(); notify(w.frozen?"Demo wallet frozen.":"Demo wallet unfrozen."); }
+      break;
+    }
+
+    case "delete-wallet":
+      if(data.transactions.some(t=>t.walletId===id)) return notify("Delete this wallet's transactions first.");
+      if(confirm("Delete this wallet?")) {
+        data.wallets=data.wallets.filter(w=>w.id!==id);
+        saveData(); renderPage(); notify("Wallet deleted.");
+      }
+      break;
+
+    case "delete-budget":
+      if(confirm("Delete this budget?")) { data.budgets=data.budgets.filter(b=>b.id!==id); saveData(); renderPage(); }
+      break;
+
+    case "delete-goal":
+      if(confirm("Delete this savings goal?")) { data.goals=data.goals.filter(g=>g.id!==id); saveData(); renderPage(); }
+      break;
+
+    case "contribute-goal": {
+      const g=data.goals.find(g=>g.id===id);
+      if(!g) break;
+      const amount=Number(prompt("How much would you like to add to this goal? (₹)"));
+      if(!Number.isFinite(amount)||amount<=0) break;
+      g.saved+=amount;
+      saveData(); renderPage(); notify("Goal progress updated.");
+      break;
+    }
+
+    case "delete-loan":
+      if(confirm("Delete this loan and its recorded repayment progress?")) { data.loans=data.loans.filter(l=>l.id!==id); saveData(); renderPage(); }
+      break;
+
+    case "pay-loan": {
+      const loan=data.loans.find(l=>l.id===id);
+      if(!loan) break;
+      const remaining=Math.max(0,loan.principal-loan.paid);
+      const amount=Number(prompt(`Record a principal repayment. Remaining principal: ${money(remaining)}. Amount paid (₹):`));
+      if(!Number.isFinite(amount)||amount<=0) break;
+      if(amount>remaining) return notify("Payment cannot exceed remaining principal in this tracker.");
+      loan.paid+=amount;
+      saveData(); renderPage(); notify("Repayment recorded.");
+      break;
+    }
+
+    case "delete-recurring":
+      if(confirm("Delete this recurring item?")) { data.recurring=data.recurring.filter(r=>r.id!==id); saveData(); renderPage(); }
+      break;
+
+    case "record-recurring": {
+      const r=data.recurring.find(r=>r.id===id);
+      if(!r) break;
+      if(!data.wallets.length) return notify("Add a wallet first.");
+      if(!confirm(`Record ${money(r.amount)} for ${r.name} as an expense?`)) break;
+      const wallet=data.wallets.find(w=>w.id==="main") || data.wallets[0];
+      if(wallet.frozen) return notify("Your selected wallet is frozen.");
+      data.transactions.push({id:uid(),type:"expense",amount:r.amount,title:r.name,category:r.category,date:today(),walletId:wallet.id});
+      saveData(); renderPage(); notify("Recurring expense recorded.");
+      break;
+    }
+
+    case "pro-checkout":
+      notify("Real payments are not configured. No money has been charged.");
+      break;
+
+    case "export-csv": exportCSV(); break;
+    case "export-json": exportJSON(); break;
+    case "import-json": importJSON(); break;
+
+    case "edit-profile": {
+      openGeneric({
+        title:"Edit profile",eyebrow:"YOUR PROFILE",
+        fields:[
+          {label:"Name",name:"name",options:{maxlength:50}},
+          {label:"Age",name:"age",type:"number",options:{min:1,step:"1"}}
+        ],
+        save:v=>{
+          const age=Number(v.age);
+          if(!v.name.trim()||!Number.isInteger(age)||age<1||age>120) return notify("Enter a valid name and age.");
+          data.profile={name:v.name.trim(),age};
+          notify("Profile updated.");
+        }
+      });
+      break;
+    }
+
+    case "reset-data":
+      if(confirm("This permanently clears FINOVA's local data in this browser. Export a backup first. Continue?")) {
+        localStorage.removeItem(STORE);
+        data=defaults();
+        showOnboarding();
+        notify("Local data reset.");
+      }
+      break;
+  }
+});
+
+/* ---------- Receipt image and receipt records ---------- */
+
+document.addEventListener("change", e => {
+  if(e.target.id==="receiptFile") {
+    const file=e.target.files?.[0];
+    if(!file) return;
+    if(!file.type.startsWith("image/")) return notify("Please choose an image file.");
+    if(file.size>8*1024*1024) return notify("Choose an image smaller than 8 MB.");
+    if(receiptImageURL) URL.revokeObjectURL(receiptImageURL);
+    receiptImageURL=URL.createObjectURL(file);
+    const preview=$("receiptPreview");
+    preview.src=receiptImageURL;
+    preview.classList.remove("hidden");
+    notify("Receipt selected. Review and enter the details.");
+  }
+
+  if(e.target.id==="backupFile") {
+    const file=e.target.files?.[0];
+    if(file) notify("Backup selected. Tap Restore selected backup to continue.");
+  }
+});
+
+document.addEventListener("submit", e => {
+  if(e.target.id!=="receiptForm") return;
+  e.preventDefault();
+
+  const name=$("receiptName").value.trim();
+  const amount=Number($("receiptAmount").value);
+  const category=$("receiptCategory").value;
+  const date=$("receiptDate").value || today();
+
+  if(!name||!Number.isFinite(amount)||amount<=0) return notify("Enter a valid receipt name and amount.");
+  if(!data.wallets.length) return notify("Add a wallet first.");
+
+  const wallet=data.wallets.find(w=>w.id==="main")||data.wallets[0];
+  if(wallet.frozen) return notify("Unfreeze your demo wallet before saving an expense.");
+
+  const receipt={id:uid(),name,amount,category,date};
+  data.receipts.push(receipt);
+  data.transactions.push({id:uid(),type:"expense",amount,title:name,category,date,walletId:wallet.id});
+  saveData();
+  renderPage();
+  notify("Receipt saved and expense recorded.");
+});
+
+/* ---------- Export and restore ---------- */
+
+function downloadFile(filename, content, type) {
+  const blob=new Blob([content],{type});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download=filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+function exportJSON() {
+  downloadFile(`finova-backup-${today()}.json`,JSON.stringify(data,null,2),"application/json");
+  notify("Backup export started.");
+}
+
+function csvCell(value) {
+  return `"${String(value ?? "").replace(/"/g,'""')}"`;
 }
 
 function exportCSV() {
-  const headers = [
-    "Date",
-    "Type",
-    "Description",
-    "Category",
-    "Amount",
-    "Wallet",
-    "Notes"
-  ];
-
-  const rows = data.transactions.map(transaction => {
-    const wallet =
-      data.wallets.find(
-        w => w.id === transaction.walletId
-      );
-
-    return [
-      transaction.date,
-      transaction.type,
-      transaction.description,
-      transaction.category,
-      transaction.amount,
-      wallet ? wallet.name : "",
-      transaction.notes || ""
-    ];
-  });
-
-  const csv =
-    [headers,...rows]
-      .map(row =>
-        row.map(value =>
-          `"${String(value).replaceAll('"','""')}"`
-        ).join(",")
-      )
-      .join("\n");
-
-  downloadFile(
-    "finance-manager-transactions.csv",
-    csv,
-    "text/csv"
-  );
-
-  showToast("CSV report exported.");
+  const header=["Date","Type","Description","Category","Amount INR","Wallet"];
+  const rows=data.transactions.map(t=>[
+    t.date,t.type,t.title,t.category,t.amount,
+    data.wallets.find(w=>w.id===t.walletId)?.name || "Wallet removed"
+  ]);
+  const csv=[header,...rows].map(row=>row.map(csvCell).join(",")).join("\r\n");
+  downloadFile(`finova-transactions-${today()}.csv`,"\uFEFF"+csv,"text/csv;charset=utf-8");
+  notify("CSV export started.");
 }
 
-function printSummary() {
-  const t = totals();
-
-  const report = `
-    <html>
-      <head>
-        <title>Finance Manager Report</title>
-
-        <style>
-          body{
-            font-family:Arial;
-            padding:30px
-          }
-
-          table{
-            width:100%;
-            border-collapse:collapse
-          }
-
-          th,td{
-            padding:10px;
-            border:1px solid #ddd;
-            text-align:left
-          }
-        </style>
-      </head>
-
-      <body>
-
-        <h1>FINANCE MANAGER REPORT</h1>
-
-        <p>
-          Generated:
-          ${new Date().toLocaleString()}
-        </p>
-
-        <h2>
-          Total balance: ${money(t.balance)}
-        </h2>
-
-        <h3>Total income: ${money(t.income)}</h3>
-        <h3>Total expenses: ${money(t.expenses)}</h3>
-        <h3>Net position: ${money(t.net)}</h3>
-
-        <h2>Transactions</h2>
-
-        <table>
-          <tr>
-            <th>Date</th>
-            <th>Description</th>
-            <th>Type</th>
-            <th>Amount</th>
-          </tr>
-
-          ${data.transactions.map(transaction => `
-            <tr>
-              <td>${escapeHTML(transaction.date)}</td>
-              <td>${escapeHTML(transaction.description)}</td>
-              <td>${escapeHTML(transaction.type)}</td>
-              <td>${money(transaction.amount)}</td>
-            </tr>
-          `).join("")}
-
-        </table>
-
-      </body>
-    </html>
-  `;
-
-  const windowPrint =
-    window.open("","_blank");
-
-  if (!windowPrint) {
-    showToast(
-      "Please allow pop-ups to print.",
-      "error"
-    );
-    return;
-  }
-
-  windowPrint.document.write(report);
-  windowPrint.document.close();
-  windowPrint.focus();
-  windowPrint.print();
-}
-
-/* =========================================================
-   FINANCE PRO
-   ========================================================= */
-
-function renderPro() {
-  return `
-    <section class="pro-hero">
-
-      <div class="pro-symbol">✦</div>
-
-      <span class="badge">FINANCE PRO</span>
-
-      <h1>
-        Turn your finance manager into a
-        <span style="color:var(--cyan)">
-          professional money dashboard.
-        </span>
-      </h1>
-
-      <p>
-        Advanced tools designed for deeper tracking,
-        reporting and financial organisation.
-      </p>
-
-      <div class="pro-price">
-        ₹99 <small>/ month</small>
-      </div>
-
-      <p>
-        Or ₹1,169/year
-      </p>
-
-      <button class="primary-btn"
-        onclick="showPremium()">
-        Explore Finance Pro
-      </button>
-
-    </section>
-
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Pro feature system</h3>
-          <p>Premium capabilities planned for the full app.</p>
-        </div>
-      </div>
-
-      <div class="pro-grid">
-
-        <div class="pro-card">
-          <div class="pro-icon">📊</div>
-          <h3>Advanced Analytics</h3>
-          <p>
-            Deeper spending trends, income analysis,
-            category breakdowns and performance tracking.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">📷</div>
-          <h3>Smart Receipt OCR</h3>
-          <p>
-            Connect an OCR service to extract merchant,
-            amount and date from receipts.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">▰</div>
-          <h3>Advanced Loan Manager</h3>
-          <p>
-            Track multiple loans, EMI progress,
-            remaining payments and repayment history.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">📄</div>
-          <h3>Professional Reports</h3>
-          <p>
-            Export detailed finance reports and
-            printable summaries.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">☁</div>
-          <h3>Cloud Sync</h3>
-          <p>
-            Future backend integration can synchronise
-            data between multiple devices.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">🤖</div>
-          <h3>AI Money Insights</h3>
-          <p>
-            Future AI integration can analyse spending
-            patterns and generate personalised summaries.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">💾</div>
-          <h3>Advanced Backup</h3>
-          <p>
-            Structured backup and restore for your
-            complete finance workspace.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">🌍</div>
-          <h3>Multi Currency</h3>
-          <p>
-            Switch between supported currencies from
-            the settings panel.
-          </p>
-        </div>
-
-        <div class="pro-card">
-          <div class="pro-icon">🎯</div>
-          <h3>Smart Goals</h3>
-          <p>
-            Track savings targets and monitor progress
-            toward financial goals.
-          </p>
-        </div>
-
-      </div>
-
-    </section>
-  `;
-}
-
-function showPremium() {
-  openModal(`
-    <button class="modal-close"
-      onclick="closeModalDirect()">×</button>
-
-    <div class="premium-hero">
-
-      <div class="big-symbol">✦</div>
-
-      <h2>FINANCE PRO</h2>
-
-      <p>
-        Advanced tools for serious money management.
-      </p>
-
-      <h1 style="margin:20px 0;color:var(--purple)">
-        ₹99
-        <small>/ month</small>
-      </h1>
-
-      <div class="pro-plan">
-        <h3>Monthly Plan</h3>
-
-        <strong style="font-size:25px">
-          ₹99/month
-        </strong>
-
-        <p>
-          Flexible monthly access.
-        </p>
-      </div>
-
-      <br>
-
-      <div class="pro-plan">
-        <h3>Yearly Plan</h3>
-
-        <strong style="font-size:25px">
-          ₹1,169/year
-        </strong>
-
-        <p>
-          Full-year Finance Pro access.
-        </p>
-      </div>
-
-      <ul class="feature-list">
-        <li>Advanced analytics</li>
-        <li>Advanced loan management</li>
-        <li>Unlimited savings goals</li>
-        <li>Enhanced reports</li>
-        <li>Cloud synchronisation</li>
-        <li>AI-powered insights</li>
-        <li>Automatic receipt OCR integration</li>
-        <li>Multi-device access</li>
-        <li>Advanced backup tools</li>
-      </ul>
-
-      <div class="insight">
-        <strong>Payment integration:</strong>
-        This browser version does not pretend to process real
-        payments. For an actual Google Play release, connect
-        Google Play Billing or another supported payment system.
-      </div>
-
-      <button class="secondary-btn"
-        style="width:100%"
-        onclick="closeModalDirect()">
-        Continue with free version
-      </button>
-
-    </div>
-  `);
-}
-
-/* =========================================================
-   BACKUP
-   ========================================================= */
-
-function renderBackup() {
-  return `
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Backup and restore</h3>
-          <p>Keep a copy of your financial records</p>
-        </div>
-      </div>
-
-      <div class="report-grid">
-
-        <div class="report-option">
-          <h3>Export backup</h3>
-
-          <p>
-            Download wallets, transactions, goals,
-            budgets, loans and settings as JSON.
-          </p>
-
-          <button class="primary-btn"
-            onclick="exportBackup()">
-            Download backup
-          </button>
-        </div>
-
-        <div class="report-option">
-          <h3>Restore backup</h3>
-
-          <p>
-            Import a previous Finance Manager backup.
-          </p>
-
-          <input type="file"
-            accept=".json,application/json"
-            onchange="restoreBackup(event)">
-        </div>
-
-        <div class="report-option">
-          <h3>Local data</h3>
-
-          <p>
-            Your data is stored in this browser using
-            localStorage.
-          </p>
-
-          <span class="badge">OFFLINE MODE</span>
-        </div>
-
-        <div class="report-option">
-          <h3>Danger zone</h3>
-
-          <p>
-            Delete all locally stored financial data.
-          </p>
-
-          <button class="danger-btn"
-            onclick="clearAllData()">
-            Erase all data
-          </button>
-        </div>
-
-      </div>
-
-    </section>
-  `;
-}
-
-function exportBackup() {
-  downloadFile(
-    "finance-manager-backup.json",
-    JSON.stringify(data,null,2),
-    "application/json"
-  );
-
-  showToast("Backup downloaded.");
-}
-
-function restoreBackup(event) {
-  const file = event.target.files[0];
-
-  if (!file) return;
-
-  const reader = new FileReader();
-
-  reader.onload = function() {
+function importJSON() {
+  const file=$("backupFile").files?.[0];
+  if(!file) return notify("Choose a backup JSON file first.");
+  if(!confirm("Restore this backup? It will replace the data currently saved in this browser.")) return;
+
+  const reader=new FileReader();
+  reader.onload=()=>{
     try {
-      const imported =
-        JSON.parse(reader.result);
-
-      if (!imported.wallets ||
-          !imported.transactions) {
-        throw new Error("Invalid backup");
-      }
-
-      data = {
-        ...structuredClone(defaultData),
-        ...imported,
-        loans: imported.loans || []
-      };
-
+      const parsed=JSON.parse(reader.result);
+      const arrays=["transactions","wallets","budgets","goals","loans","recurring","receipts"];
+      if(!parsed||typeof parsed!=="object"||!arrays.every(k=>Array.isArray(parsed[k]))) throw new Error("Invalid backup");
+      if(!parsed.profile||typeof parsed.profile.name!=="string") throw new Error("Missing profile");
+      const base=defaults();
+      data={...base,...parsed};
       saveData();
-
-      showToast("Backup restored.");
-      render();
-
+      showApp();
+      setPage("reports");
+      notify("Backup restored.");
     } catch {
-      showToast(
-        "Invalid backup file.",
-        "error"
-      );
+      notify("This file is not a valid FINOVA backup.");
     }
   };
-
+  reader.onerror=()=>notify("Could not read the selected file.");
   reader.readAsText(file);
 }
 
-function clearAllData() {
-  if (!confirm(
-    "This will permanently erase all local app data. Continue?"
-  )) return;
+/* ---------- Start ---------- */
 
-  localStorage.removeItem(STORAGE_KEY);
+function init() {
+  $("txDate").value=today();
+  $("receiptDate").value=today();
 
-  data = structuredClone(defaultData);
-
-  saveData();
-
-  showToast("All data erased.");
-  render();
+  if(data.profile && data.policyAccepted) showApp();
+  else showOnboarding();
 }
 
-function downloadFile(filename,content,type) {
-  const blob =
-    new Blob([content],{type});
-
-  const url =
-    URL.createObjectURL(blob);
-
-  const link =
-    document.createElement("a");
-
-  link.href = url;
-  link.download = filename;
-
-  link.click();
-
-  URL.revokeObjectURL(url);
-}
-
-/* =========================================================
-   SETTINGS
-   ========================================================= */
-
-function renderSettings() {
-  return `
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Application settings</h3>
-          <p>Personalise your finance workspace</p>
-        </div>
-      </div>
-
-      <div class="settings-row">
-
-        <div>
-          <h4>Profile name</h4>
-          <p>
-            Displayed as your finance workspace name.
-          </p>
-        </div>
-
-        <div class="settings-control">
-          <input id="profile-name"
-            value="${escapeHTML(data.profile.name)}">
-        </div>
-
-      </div>
-
-      <div class="settings-row">
-
-        <div>
-          <h4>Currency</h4>
-          <p>Used for displaying amounts.</p>
-        </div>
-
-        <div class="settings-control">
-
-          <select id="profile-currency">
-            ${Object.keys(currencySymbols).map(currency =>
-              `<option
-                value="${currency}"
-                ${data.profile.currency === currency ? "selected":""}>
-                ${currency}
-              </option>`
-            ).join("")}
-          </select>
-
-        </div>
-
-      </div>
-
-      <div class="settings-row">
-
-        <div>
-          <h4>Theme</h4>
-          <p>Switch appearance.</p>
-        </div>
-
-        <div class="settings-control">
-
-          <select id="profile-theme">
-            <option value="dark"
-              ${data.profile.theme === "dark" ? "selected":""}>
-              Dark
-            </option>
-
-            <option value="light"
-              ${data.profile.theme === "light" ? "selected":""}>
-              Light
-            </option>
-          </select>
-
-        </div>
-
-      </div>
-
-      <div class="settings-row">
-
-        <div>
-          <h4>Monthly income target</h4>
-          <p>Optional monthly income target.</p>
-        </div>
-
-        <div class="settings-control">
-
-          <input id="income-target"
-            type="number"
-            value="${data.settings.monthlyIncomeTarget}">
-
-        </div>
-
-      </div>
-
-      <div class="settings-row">
-
-        <div>
-          <h4>Save changes</h4>
-          <p>Apply your preferences.</p>
-        </div>
-
-        <button class="primary-btn"
-          onclick="saveSettings()">
-          Save settings
-        </button>
-
-      </div>
-
-    </section>
-
-    <section class="panel">
-
-      <div class="panel-header">
-        <div>
-          <h3>Feature status</h3>
-          <p>Finance Manager capabilities</p>
-        </div>
-      </div>
-
-      <div class="insight">
-        <strong>Available:</strong>
-        Offline transactions, wallets, budgets,
-        goals, loans, EMI tracking, recurring payments,
-        reports, charts and backup/restore.
-      </div>
-
-      <div class="insight">
-        <strong>Integration required:</strong>
-        Real bank connections, secure cloud accounts,
-        automatic OCR, AI services, Google Play Billing,
-        biometric security and multi-device synchronisation.
-      </div>
-
-    </section>
-  `;
-}
-
-function saveSettings() {
-  data.profile.name =
-    document.getElementById("profile-name")
-      .value.trim() || "My Finance";
-
-  data.profile.currency =
-    document.getElementById("profile-currency").value;
-
-  data.profile.theme =
-    document.getElementById("profile-theme").value;
-
-  data.settings.monthlyIncomeTarget =
-    numberValue(
-      document.getElementById("income-target").value
-    );
-
-  saveData();
-
-  showToast("Settings saved.");
-  render();
-}
-
-/* =========================================================
-   START
-   ========================================================= */
-
-setupNavigation();
-render();
-/* =========================================
-   FINOVA WELCOME — SAVE USER NAME
-   Add this at the END of existing script.js
-   ========================================= */
-
-(function finovaWelcomeSetup() {
-  const NAME_KEY = "finova_user_name_v1";
-
-  function setup() {
-    const screen = document.getElementById("finova-welcome");
-    const form = document.getElementById("finova-welcome-form");
-    const input = document.getElementById("finova-user-name");
-
-    if (!screen || !form || !input) return;
-
-    let savedName = "";
-
-    try {
-      savedName = localStorage.getItem(NAME_KEY) || "";
-    } catch (error) {
-      console.warn("FINOVA could not read the saved name.", error);
-    }
-
-    if (savedName.trim()) {
-      screen.classList.add("is-hidden");
-
-      document.dispatchEvent(new CustomEvent("finova:name-entered", {
-        detail: { name: savedName.trim() }
-      }));
-
-      return;
-    }
-
-    screen.classList.remove("is-hidden");
-
-    form.addEventListener("submit", function (event) {
-      event.preventDefault();
-
-      const name = input.value.trim().slice(0, 40);
-
-      if (!name) {
-        input.focus();
-        return;
-      }
-
-      try {
-        localStorage.setItem(NAME_KEY, name);
-      } catch (error) {
-        console.warn("FINOVA could not save the name.", error);
-      }
-
-      screen.classList.add("is-hidden");
-
-      document.dispatchEvent(new CustomEvent("finova:name-entered", {
-        detail: { name: name }
-      }));
-    });
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", setup, { once: true });
-  } else {
-    setup();
-  }
-})();
-
+init();
 
