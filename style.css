@@ -941,3 +941,359 @@ textarea:focus {
     padding: 15px;
   }
 }
+
+/* ==========================================
+   FINOVA — MATTE BLACK + LIME GREEN THEME
+   Visual-only upgrade. Preserve existing CSS.
+   ========================================== */
+
+:root {
+  --bg: #070907;
+  --panel: #101410;
+  --panel-2: #151b15;
+  --panel-3: #202820;
+  --text: #f3f8f1;
+  --muted: #98a695;
+  --border: rgba(166, 255, 77, 0.15);
+  --cyan: #b4ff4d;
+  --purple: #8de83e;
+  --green: #b4ff4d;
+  --red: #ff6b78;
+  --yellow: #e5ff72;
+  --shadow: 0 14px 40px rgba(0, 0, 0, 0.32);
+}
+
+[data-theme="light"] {
+  --bg: #f4f8f0;
+  --panel: #ffffff;
+  --panel-2: #edf4e8;
+  --panel-3: #dce9d4;
+  --text: #172015;
+  --muted: #687761;
+  --border: rgba(65, 110, 40, 0.18);
+  --cyan: #579d20;
+  --purple: #70b52f;
+  --green: #579d20;
+  --red: #d84453;
+  --yellow: #a18b17;
+  --shadow: 0 12px 30px rgba(35, 65, 20, 0.09);
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+body {
+  background-image:
+    radial-gradient(
+      ellipse at 80% 0%,
+      rgba(180, 255, 77, 0.055),
+      transparent 38%
+    );
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Brand */
+
+.brand-logo {
+  color: #101707;
+  background: linear-gradient(135deg, #e0ff9d, #a7f536);
+  border-color: rgba(180, 255, 77, 0.45);
+  box-shadow: 0 0 25px rgba(180, 255, 77, 0.13);
+}
+
+.brand h1 span,
+.nav-btn.active,
+.quick-actions span {
+  color: var(--green);
+}
+
+/* Navigation */
+
+.nav-btn {
+  transition:
+    background 0.22s ease,
+    color 0.22s ease,
+    transform 0.22s ease;
+}
+
+.nav-btn:hover {
+  transform: translateX(2px);
+}
+
+.nav-btn.active {
+  background: linear-gradient(
+    90deg,
+    rgba(180, 255, 77, 0.12),
+    rgba(180, 255, 77, 0.025)
+  );
+  border-left: 3px solid var(--green);
+}
+
+/* Buttons */
+
+.primary-btn {
+  background: linear-gradient(135deg, #d9ff91, #a7f536);
+  color: #101707;
+  box-shadow: 0 5px 18px rgba(180, 255, 77, 0.08);
+}
+
+.primary-btn:hover,
+.secondary-btn:hover,
+.danger-btn:hover {
+  transform: translateY(-2px);
+}
+
+.secondary-btn,
+.icon-btn,
+.menu-btn,
+.mobile-close {
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.premium-mini {
+  border-color: rgba(180, 255, 77, 0.25);
+  background: linear-gradient(
+    145deg,
+    rgba(180, 255, 77, 0.09),
+    rgba(180, 255, 77, 0.015)
+  );
+}
+
+.premium-mini strong {
+  color: var(--green);
+}
+
+.premium-mini button {
+  background: linear-gradient(135deg, #d9ff91, #a7f536);
+  color: #101707;
+}
+
+/* Cards and panels */
+
+.stat-card,
+.panel,
+.wallet-card,
+.budget-card,
+.goal-card,
+.report-option,
+.loan-card,
+.pro-card {
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+  transition:
+    border-color 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
+}
+
+.wallet-card:hover,
+.budget-card:hover,
+.goal-card:hover,
+.loan-card:hover,
+.pro-card:hover {
+  border-color: rgba(180, 255, 77, 0.35);
+  box-shadow: 0 14px 35px rgba(0, 0, 0, 0.23);
+  transform: translateY(-3px);
+}
+
+/* Animated debit-card appearance for the first
+   dashboard statistic card. Existing balance data
+   and content are preserved. */
+
+.stats-grid .stat-card:first-child {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 155px;
+  padding: 22px;
+  border: 1px solid rgba(180, 255, 77, 0.35);
+  border-radius: 20px;
+  background:
+    radial-gradient(
+      circle at 90% 15%,
+      rgba(180, 255, 77, 0.19),
+      transparent 34%
+    ),
+    linear-gradient(135deg, #1b2517 0%, #0c100c 58%, #151d12 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 12px 35px rgba(0, 0, 0, 0.28),
+    0 0 22px rgba(180, 255, 77, 0.045);
+  animation: finoCardFloat 5s ease-in-out infinite;
+}
+
+.stats-grid .stat-card:first-child::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -65%;
+  left: -80%;
+  width: 55%;
+  height: 230%;
+  transform: rotate(25deg);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(220, 255, 190, 0.09),
+    transparent
+  );
+  animation: finoCardShine 7s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.stats-grid .stat-card:first-child .stat-label {
+  color: #b9d1a9;
+  letter-spacing: 1.5px;
+}
+
+.stats-grid .stat-card:first-child .stat-value {
+  position: relative;
+  z-index: 1;
+  color: #d7ff9a;
+  font-size: clamp(23px, 2.4vw, 32px);
+  font-weight: 850;
+  letter-spacing: -0.8px;
+  text-shadow: 0 0 18px rgba(180, 255, 77, 0.1);
+}
+
+.stats-grid .stat-card:first-child .stat-meta {
+  color: #a6b69b;
+}
+
+/* Green accents */
+
+.badge {
+  background: rgba(180, 255, 77, 0.09);
+  color: var(--green);
+}
+
+.progress-bar {
+  background: linear-gradient(90deg, #91e638, #d6ff85);
+  box-shadow: 0 0 12px rgba(180, 255, 77, 0.15);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(180, 255, 77, 0.09);
+}
+
+.insight {
+  border-left-color: var(--green);
+}
+
+.upload-zone {
+  border-color: var(--green);
+  background: rgba(180, 255, 77, 0.035);
+}
+
+.loan-icon {
+  color: var(--green);
+  background: rgba(180, 255, 77, 0.09);
+}
+
+.loan-progress-number {
+  color: var(--green);
+}
+
+.pro-hero {
+  border-color: rgba(180, 255, 77, 0.25);
+  background:
+    radial-gradient(
+      circle at 90% 10%,
+      rgba(180, 255, 77, 0.13),
+      transparent 35%
+    ),
+    var(--panel);
+}
+
+.pro-symbol {
+  background: linear-gradient(135deg, #d9ff91, #a7f536);
+  color: #101707;
+}
+
+.pro-price {
+  color: var(--green);
+}
+
+.pro-plan.active {
+  border-color: var(--green);
+}
+
+/* Page transitions */
+
+.page {
+  animation: finoPageEnter 0.28s ease both;
+}
+
+@keyframes finoPageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes finoCardFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes finoCardShine {
+  0%, 15% {
+    left: -80%;
+  }
+  45%, 100% {
+    left: 140%;
+  }
+}
+
+/* Mobile refinements */
+
+@media (max-width: 600px) {
+  .stats-grid .stat-card:first-child {
+    min-height: 145px;
+    padding: 17px;
+    border-radius: 17px;
+  }
+
+  .stat-card,
+  .panel {
+    border-radius: 14px;
+  }
+
+  .topbar h2 {
+    font-size: 21px;
+  }
+
+  .data-table {
+    min-width: 600px;
+  }
+}
+
+/* Respect reduced-motion preferences */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
