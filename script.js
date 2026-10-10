@@ -3330,3 +3330,70 @@ function saveSettings() {
 
 setupNavigation();
 render();
+
+/* =========================================
+   FINOVA WELCOME — SAVE USER NAME
+   Add this at the END of existing script.js
+   ========================================= */
+
+(function finovaWelcomeSetup() {
+  const NAME_KEY = "finova_user_name_v1";
+
+  function setup() {
+    const screen = document.getElementById("finova-welcome");
+    const form = document.getElementById("finova-welcome-form");
+    const input = document.getElementById("finova-user-name");
+
+    if (!screen || !form || !input) return;
+
+    let savedName = "";
+
+    try {
+      savedName = localStorage.getItem(NAME_KEY) || "";
+    } catch (error) {
+      console.warn("FINOVA could not read the saved name.", error);
+    }
+
+    if (savedName.trim()) {
+      screen.classList.add("is-hidden");
+
+      document.dispatchEvent(new CustomEvent("finova:name-entered", {
+        detail: { name: savedName.trim() }
+      }));
+
+      return;
+    }
+
+    screen.classList.remove("is-hidden");
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+
+      const name = input.value.trim().slice(0, 40);
+
+      if (!name) {
+        input.focus();
+        return;
+      }
+
+      try {
+        localStorage.setItem(NAME_KEY, name);
+      } catch (error) {
+        console.warn("FINOVA could not save the name.", error);
+      }
+
+      screen.classList.add("is-hidden");
+
+      document.dispatchEvent(new CustomEvent("finova:name-entered", {
+        detail: { name: name }
+      }));
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", setup, { once: true });
+  } else {
+    setup();
+  }
+})();
+
