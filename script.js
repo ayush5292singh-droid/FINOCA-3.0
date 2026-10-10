@@ -3330,7 +3330,6 @@ function saveSettings() {
 
 setupNavigation();
 render();
-
 /* =========================================
    FINOVA WELCOME — SAVE USER NAME
    Add this at the END of existing script.js
@@ -3396,4 +3395,5 @@ render();
     setup();
   }
 })();
+
 
