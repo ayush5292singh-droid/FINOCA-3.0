@@ -1,994 +1,1883 @@
 
 "use strict";
 
-/* ==========================================================
-   FINOVA — SMART MONEY OS
-   Browser-based personal finance tracker
-   ========================================================== */
+/* FINOVA — browser-based personal finance app
+   Data is stored locally in this browser. Pro payments are not connected. */
 
-const $ = (id) => document.getElementById(id);
-const STORE = "finova_smart_money_os_v1";
+const APP_KEY = "finova_premium_app_v1";
 
-const money = (n) => new Intl.NumberFormat("en-IN", {
-  style: "currency", currency: "INR", maximumFractionDigits: 2
-}).format(Number(n) || 0);
+const CATEGORIES = [
+  "Food", "Transport", "Shopping", "Bills", "Health", "Education",
+  "Rent", "Salary", "Investment", "Travel", "Entertainment", "Other"
+];
 
-const number = (n) => Math.max(0, Number(n) || 0);
-const today = () => new Date().toISOString().slice(0, 10);
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({
-  "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
-}[c]));
+const NAV = [
+  ["transactions", "↔", "Transactions"],
+  ["accounts", "▤", "Accounts & Cards"],
+  ["budgets", "◷", "Budgets"],
+  ["goals", "◎", "Savings Goals"],
+  ["loans", "⌁", "Loans & EMI"],
+  ["recurring", "⟳", "Recurring Payments"],
+  ["scanner", "▧", "Receipt Scanner"],
+  ["analytics", "▥", "Analytics & Reports"]
+];
 
-const defaults = () => ({
-  profile: null,
-  policyAccepted: false,
-  pro: false,
-  transactions: [],
-  wallets: [{ id: "main", name: "Main Wallet", type: "Cash", opening: 0, frozen: false, theme: "card-dark" }],
-  budgets: [],
-  goals: [],
-  loans: [],
-  recurring: [],
-  receipts: [],
-  settings: { currency: "INR", theme: "dark" }
-});
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
-let data = loadData();
-let currentPage = "dashboard";
-let toastTimer;
-let genericConfig = null;
-let receiptImageURL = null;
+const monthKey = (date = today()) => String(date).slice(0, 7);
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-function loadData() {
+const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[ch]));
+
+const num = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+
+const fmtDate = date => date
+  ? new Date(date + "T12:00:00").toLocaleDateString("en-IN", {
+      day: "numeric", month: "short", year: "numeric"
+    })
+  : "No date";
+
+function freshState() {
+  return {
+    profile: null,
+    currency: "INR",
+    theme: "dark",
+    balanceHidden: false,
+    accounts: [
+      { id: "cash-main", name: "Main Wallet", type: "Cash", balance: 0, color: "green" }
+    ],
+    transactions: [],
+    budgets: [],
+    goals: [],
+    loans: [],
+    recurring: [],
+    membership: { tier: "free", status: "inactive", expiresAt: null },
+    settings: { notifications: false },
+    onboardingDone: false
+  };
+}
+
+function loadState() {
   try {
-    const raw = localStorage.getItem(STORE);
-    if (!raw) return defaults();
-    const saved = JSON.parse(raw);
-    const base = defaults();
-    return {
-      ...base, ...saved,
-      profile: saved.profile || null,
-      transactions: Array.isArray(saved.transactions) ? saved.transactions : [],
-      wallets: Array.isArray(saved.wallets) && saved.wallets.length ? saved.wallets : base.wallets,
-      budgets: Array.isArray(saved.budgets) ? saved.budgets : [],
-      goals: Array.isArray(saved.goals) ? saved.goals : [],
-      loans: Array.isArray(saved.loans) ? saved.loans : [],
-      recurring: Array.isArray(saved.recurring) ? saved.recurring : [],
-      receipts: Array.isArray(saved.receipts) ? saved.receipts : []
-    };
+    const saved = JSON.parse(localStorage.getItem(APP_KEY));
+    if (!saved || typeof saved !== "object") return freshState();
+
+    const base = freshState();
+    const merged = { ...base, ...saved };
+
+    for (const key of ["accounts", "transactions", "budgets", "goals", "loans", "recurring"]) {
+      if (!Array.isArray(merged[key])) merged[key] = base[key];
+    }
+
+    if (!merged.accounts.length) merged.accounts = base.accounts;
+    if (!merged.settings) merged.settings = base.settings;
+    if (!merged.membership) merged.membership = base.membership;
+
+    return merged;
   } catch {
-    return defaults();
+    return freshState();
   }
 }
 
-function saveData() {
+let state = loadState();
+let currentPage = "dashboard";
+let menuOpen = false;
+let modalType = "";
+let modalExtra = {};
+let toastTimer;
+let scannerImage = "";
+
+function save() {
   try {
-    localStorage.setItem(STORE, JSON.stringify(data));
-    updateProfile();
+    localStorage.setItem(APP_KEY, JSON.stringify(state));
   } catch {
-    notify("Storage is full. Export your backup and remove some data.");
+    notify("Storage is full. Export your backup and remove unused data.");
   }
+}
+
+function money(value) {
+  if (state.balanceHidden) return "••••••";
+
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: state.currency || "INR",
+      maximumFractionDigits: 2
+    }).format(num(value));
+  } catch {
+    return "₹" + num(value).toFixed(2);
+  }
+}
+
+function signedMoney(value, kind) {
+  const sign = kind === "income" ? "+" : kind === "expense" ? "−" : "";
+  return sign + money(Math.abs(num(value)));
 }
 
 function notify(message) {
-  const el = $("toast");
+  const el = document.getElementById("toast");
+  if (!el) return;
+
   el.textContent = message;
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 3000);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2800);
 }
 
-function updateProfile() {
-  const name = data.profile?.name || "Your profile";
-  $("sidebarName").textContent = name;
-  $("sidebarAvatar").textContent = name.charAt(0).toUpperCase();
-  $("topAvatar").textContent = name.charAt(0).toUpperCase();
-  $("planLabel").textContent = data.pro ? "PRO PLAN" : "FREE PLAN";
+function totalIncome() {
+  return state.transactions
+    .filter(t => t.type === "income")
+    .reduce((sum, t) => sum + num(t.amount), 0);
 }
 
-function sum(items, fn) {
-  return items.reduce((total, item) => total + (Number(fn(item)) || 0), 0);
+function totalExpenses() {
+  return state.transactions
+    .filter(t => t.type === "expense")
+    .reduce((sum, t) => sum + num(t.amount), 0);
 }
 
-function walletBalance(walletId) {
-  const wallet = data.wallets.find(w => w.id === walletId);
-  if (!wallet) return 0;
-  return number(wallet.opening) + sum(
-    data.transactions.filter(t => t.walletId === walletId),
-    t => t.type === "income" ? t.amount : -t.amount
-  );
+function netBalance() {
+  return state.accounts.reduce((sum, a) => sum + num(a.balance), 0);
 }
 
-function totals() {
-  const income = sum(data.transactions.filter(t => t.type === "income"), t => t.amount);
-  const expenses = sum(data.transactions.filter(t => t.type === "expense"), t => t.amount);
-  const walletTotal = sum(data.wallets, w => walletBalance(w.id));
-  const savedGoals = sum(data.goals, g => g.saved);
-  const debt = sum(data.loans, l => Math.max(0, l.principal - l.paid));
-  return { income, expenses, walletTotal, savedGoals, debt };
+function accountName(id) {
+  return state.accounts.find(a => a.id === id)?.name || "Unknown account";
 }
 
-function monthTransactions() {
-  const month = today().slice(0, 7);
-  return data.transactions.filter(t => String(t.date).startsWith(month));
-}
-
-function monthTotals() {
-  const tx = monthTransactions();
-  return {
-    income: sum(tx.filter(t => t.type === "income"), t => t.amount),
-    expenses: sum(tx.filter(t => t.type === "expense"), t => t.amount)
-  };
-}
-
-function walletOptions(selected) {
-  if (!data.wallets.length) return '<option value="">No wallets available</option>';
-  return data.wallets.map(w =>
-    `<option value="${esc(w.id)}" ${w.id === selected ? "selected" : ""}>${esc(w.name)}</option>`
+function categoryOptions(selected = "") {
+  return CATEGORIES.map(c =>
+    `<option value="${esc(c)}" ${c === selected ? "selected" : ""}>${esc(c)}</option>`
   ).join("");
 }
 
-function setPage(page) {
-  const allowed = [
-    "dashboard", "transactions", "wallets", "budgets", "goals",
-    "loans", "recurring", "receipts", "analytics", "reports", "pro", "settings"
-  ];
-  if (!allowed.includes(page)) return;
-  currentPage = page;
+function accountOptions(selected = "") {
+  return state.accounts.map(a =>
+    `<option value="${esc(a.id)}" ${a.id === selected ? "selected" : ""}>${esc(a.name)}</option>`
+  ).join("");
+}
 
-  document.querySelectorAll("[data-page]").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.page === page);
+function pageTitle(page) {
+  return ({
+    dashboard: "Your financial overview",
+    transactions: "Transactions",
+    accounts: "Accounts & Cards",
+    budgets: "Budgets",
+    goals: "Savings Goals",
+    loans: "Loans & EMI",
+    recurring: "Recurring Payments",
+    scanner: "Receipt Scanner",
+    analytics: "Analytics & Reports",
+    pro: "FINOVA Pro",
+    settings: "Settings"
+  })[page] || "FINOVA";
+}
+
+function membershipInfo() {
+  const m = state.membership || {};
+  const active = m.status === "active" &&
+    (!m.expiresAt || new Date(m.expiresAt) > new Date());
+
+  if (!active) {
+    return {
+      tier: "free",
+      label: "FINOVA Free",
+      badge: "STANDARD",
+      cls: "membership-free",
+      note: "Your financial journey starts here."
+    };
+  }
+
+  if (m.tier === "gold-yearly") {
+    return {
+      tier: m.tier,
+      label: "FINOVA Gold",
+      badge: "YEARLY PLAN",
+      cls: "membership-gold",
+      note: "Yearly plan · Active"
+    };
+  }
+
+  return {
+    tier: "platinum-monthly",
+    label: "FINOVA Platinum",
+    badge: "MONTHLY PLAN",
+    cls: "membership-platinum",
+    note: "Monthly plan · Active"
+  };
+}
+
+function membershipCard() {
+  const m = membershipInfo();
+
+  return `<div class="membership ${m.cls}">
+    <div class="membership-top">
+      <div>
+        <div class="eyebrow">Your membership</div>
+        <h2>${m.label}</h2>
+      </div>
+      <span class="plan-badge">${m.badge}</span>
+    </div>
+    <div class="membership-bottom">
+      <div>
+        <div class="membership-note">${m.note}</div>
+        <div style="font-weight:800;letter-spacing:.13em;margin-top:9px;font-size:12px">F I N O V A</div>
+      </div>
+      <div style="font-size:27px;opacity:.65">✧</div>
+    </div>
+  </div>`;
+}
+
+function transactionRows(items, actions = true) {
+  if (!items.length) {
+    return `<div class="empty-state">
+      <div class="empty-icon">↔</div>
+      <p>No transactions yet.</p>
+      <small>Add your first income or expense.</small>
+    </div>`;
+  }
+
+  return `<div class="transaction-list">${items.map(t => `
+    <div class="transaction-row">
+      <div class="mini-icon">${t.type === "income" ? "↙" : "↗"}</div>
+      <div class="transaction-info">
+        <strong>${esc(t.title)}</strong>
+        <small>${esc(t.category)} · ${esc(accountName(t.accountId))} · ${fmtDate(t.date)}</small>
+      </div>
+      <div style="text-align:right">
+        <div class="transaction-amount ${t.type === "income" ? "positive" : "negative"}">${signedMoney(t.amount, t.type)}</div>
+        ${actions ? `<div class="inline" style="justify-content:flex-end;margin-top:7px;gap:5px">
+          <button class="ghost-btn" data-action="edit-transaction" data-id="${esc(t.id)}" style="padding:5px 8px;font-size:11px">Edit</button>
+          <button class="ghost-btn" data-action="delete-transaction" data-id="${esc(t.id)}" style="padding:5px 8px;font-size:11px">×</button>
+        </div>` : ""}
+      </div>
+    </div>`).join("")}</div>`;
+}
+
+function pageHeader(title, subtitle, action = "") {
+  return `<div class="page-heading">
+    <div><h1>${title}</h1><p>${subtitle}</p></div>
+    <div class="inline">${action}</div>
+  </div>`;
+}
+
+function emptyCard(icon, title, description, button = "") {
+  return `<div class="card empty-state">
+    <div class="empty-icon">${icon}</div>
+    <h3>${title}</h3>
+    <p>${description}</p>
+    ${button ? `<div style="margin-top:17px">${button}</div>` : ""}
+  </div>`;
+}
+
+function chartMarkup() {
+  const months = [];
+  const now = new Date();
+
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    const label = d.toLocaleDateString("en-IN", { month: "short" });
+
+    const income = state.transactions
+      .filter(t => t.type === "income" && monthKey(t.date) === key)
+      .reduce((s, t) => s + num(t.amount), 0);
+
+    const expense = state.transactions
+      .filter(t => t.type === "expense" && monthKey(t.date) === key)
+      .reduce((s, t) => s + num(t.amount), 0);
+
+    months.push({ key, label, income, expense });
+  }
+
+  const max = Math.max(1, ...months.flatMap(m => [m.income, m.expense]));
+
+  return `<div class="bar-chart">${months.map(m => `
+    <div class="bar-column">
+      <div class="bar-value">${m.income + m.expense ? esc(shortAmount(Math.max(m.income, m.expense))) : "—"}</div>
+      <div class="bar-track">
+        <div class="bar-fill" title="Income ${money(m.income)}; expenses ${money(m.expense)}" style="height:${Math.max(3, m.income / max * 100)}%"></div>
+      </div>
+      <div class="bar-label">${m.label}</div>
+    </div>`).join("")}</div>
+    <div class="inline" style="margin-top:12px;gap:17px;font-size:12px">
+      <span class="positive">● Income</span>
+      <span class="negative">● Expenses shown in reports</span>
+    </div>`;
+}
+
+function shortAmount(value) {
+  const n = num(value);
+  if (n >= 10000000) return (n / 10000000).toFixed(1) + "Cr";
+  if (n >= 100000) return (n / 100000).toFixed(1) + "L";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+  return Math.round(n).toString();
+}
+
+function dashboardPage() {
+  const recent = [...state.transactions]
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+    .slice(0, 5);
+
+  const activeBudgets = state.budgets.filter(b => !b.period || b.period === monthKey());
+
+  return `${pageHeader(
+    "Good " + greeting() + ", " + esc(state.profile?.name || "there"),
+    "Here is your money at a glance."
+  )}
+    <div class="grid grid-2">
+      ${membershipCard()}
+      <div class="card balance-card">
+        <div class="balance-top">
+          <div class="eyebrow">Total account balance</div>
+          <button class="icon-btn" data-action="toggle-balance" aria-label="Toggle balance visibility">${state.balanceHidden ? "◉" : "◎"}</button>
+        </div>
+        <div class="big-number balance-amount">${money(netBalance())}</div>
+        <div class="balance-footer">
+          <div><span>Total income</span><strong class="positive">${money(totalIncome())}</strong></div>
+          <div><span>Total expenses</span><strong class="negative">${money(totalExpenses())}</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:18px">
+      <button class="shortcut" data-action="add-transaction">
+        <span>
+          <span style="display:block;font-size:17px">+ Add transaction</span>
+          <span style="display:block;font-size:12px;font-weight:500;opacity:.72;margin-top:4px">Record income or an expense</span>
+        </span>
+        <span class="shortcut-symbol">↗</span>
+      </button>
+    </div>
+
+    <div class="section-heading">
+      <h2>Monthly overview</h2>
+      <button class="ghost-btn" data-page="analytics">View reports ↗</button>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="eyebrow">Cash flow</div>
+        <h2 style="margin-top:9px">${money(totalIncome() - totalExpenses())}</h2>
+        <p class="muted">Income minus expenses · all recorded time</p>
+        ${chartMarkup()}
+      </div>
+      <div class="card">
+        <div class="section-heading" style="margin-top:0">
+          <h3>Recent transactions</h3>
+          <button class="ghost-btn" data-page="transactions">View all</button>
+        </div>
+        ${transactionRows(recent, false)}
+      </div>
+    </div>
+
+    <div class="section-heading">
+      <h2>Your accounts</h2>
+      <button class="ghost-btn" data-page="accounts">Manage accounts</button>
+    </div>
+
+    <div class="grid grid-3">${state.accounts.slice(0, 3).map(a => `
+      <div class="card stat-card">
+        <div>
+          <div class="eyebrow">${esc(a.type)}</div>
+          <div style="font-weight:700;margin:8px 0">${esc(a.name)}</div>
+          <div class="small-number">${money(a.balance)}</div>
+        </div>
+        <div class="mini-icon">▤</div>
+      </div>`).join("")}
+    </div>
+
+    ${activeBudgets.length ? `
+      <div class="section-heading">
+        <h2>Budget snapshot</h2>
+        <button class="ghost-btn" data-page="budgets">Open budgets</button>
+      </div>
+      <div class="grid grid-2">${activeBudgets.slice(0, 2).map(b => {
+        const used = state.transactions
+          .filter(t => t.type === "expense" && t.category === b.category && monthKey(t.date) === monthKey())
+          .reduce((s, t) => s + num(t.amount), 0);
+
+        const pct = num(b.limit) ? used / num(b.limit) * 100 : 0;
+
+        return `<div class="card">
+          <div class="row-between">
+            <strong>${esc(b.category)}</strong>
+            <span class="pill ${pct >= 100 ? "red" : "green"}">${Math.round(pct)}%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill ${pct >= 100 ? "over" : ""}" style="width:${Math.min(100, pct)}%"></div>
+          </div>
+          <small>${money(used)} spent of ${money(b.limit)}</small>
+        </div>`;
+      }).join("")}</div>` : ""}`;
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
+}
+
+function transactionsPage() {
+  return `${pageHeader(
+    "Transactions",
+    "Your income and expenses, all in one place.",
+    `<button class="primary-btn" data-action="add-transaction">+ Add transaction</button>`
+  )}
+    <div class="card">
+      <div class="grid grid-3">
+        <div class="field">
+          <label for="transaction-search">Search</label>
+          <input id="transaction-search" class="search-input" placeholder="Search title or category">
+        </div>
+        <div class="field">
+          <label for="transaction-type-filter">Type</label>
+          <select id="transaction-type-filter">
+            <option value="all">All transactions</option>
+            <option value="income">Income</option>
+            <option value="expense">Expenses</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="transaction-month-filter">Month</label>
+          <input id="transaction-month-filter" type="month" value="${monthKey()}">
+        </div>
+      </div>
+      <div id="transaction-results" style="margin-top:18px">
+        ${transactionRows([...state.transactions].sort((a, b) => (b.date || "").localeCompare(a.date || "")))}
+      </div>
+    </div>`;
+}
+
+function accountsPage() {
+  return `${pageHeader(
+    "Accounts & Cards",
+    "Keep wallets, accounts and your visual debit cards organized.",
+    `<button class="primary-btn" data-action="add-account">+ Add account</button>`
+  )}
+    <div class="grid grid-3">${state.accounts.map(a => `
+      <div class="account-card ${esc(a.color || "green")}">
+        <div class="row-between">
+          <div class="eyebrow" style="color:inherit">${esc(a.type)}</div>
+          <div class="card-chip"></div>
+        </div>
+        <div>
+          <div class="account-balance">${money(a.balance)}</div>
+          <div style="margin-top:5px;font-weight:700">${esc(a.name)}</div>
+        </div>
+        <div class="account-meta">
+          <span>FINOVA VIRTUAL</span>
+          <span>•••• ${esc(a.id.slice(-4).toUpperCase())}</span>
+        </div>
+        <div class="inline" style="position:relative;z-index:2;margin-top:12px">
+          <button class="secondary-btn" data-action="edit-account" data-id="${esc(a.id)}">Edit</button>
+          <button class="secondary-btn" data-action="transfer" data-id="${esc(a.id)}">Transfer</button>
+        </div>
+      </div>`).join("")}</div>
+
+    <p class="muted" style="font-size:12px;margin-top:17px">
+      These are simulated cards for organizing your app data. They are not real bank-issued debit cards and cannot make payments.
+    </p>
+
+    <div class="section-heading"><h2>Recent account activity</h2></div>
+    <div class="card">
+      ${transactionRows([...state.transactions].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 10))}
+    </div>`;
+}
+
+function budgetsPage() {
+  const budgets = state.budgets;
+
+  return `${pageHeader(
+    "Budgets",
+    "Set limits and keep an eye on spending.",
+    `<button class="primary-btn" data-action="add-budget">+ Create budget</button>`
+  )}
+    ${budgets.length ? `<div class="grid grid-2">${budgets.map(b => {
+      const used = state.transactions
+        .filter(t => t.type === "expense" && t.category === b.category && monthKey(t.date) === (b.period || monthKey()))
+        .reduce((s, t) => s + num(t.amount), 0);
+
+      const pct = num(b.limit) ? used / num(b.limit) * 100 : 0;
+
+      return `<div class="card">
+        <div class="row-between">
+          <div>
+            <div class="eyebrow">Monthly budget</div>
+            <h2 style="margin-top:8px">${esc(b.category)}</h2>
+          </div>
+          <button class="ghost-btn" data-action="delete-budget" data-id="${esc(b.id)}">Remove</button>
+        </div>
+        <div class="big-number" style="font-size:27px">${money(Math.max(0, num(b.limit) - used))}</div>
+        <small>Remaining · ${money(used)} of ${money(b.limit)} spent</small>
+        <div class="progress-track">
+          <div class="progress-fill ${pct >= 100 ? "over" : ""}" style="width:${Math.min(100, pct)}%"></div>
+        </div>
+        <span class="pill ${pct >= 100 ? "red" : pct >= 80 ? "gold" : "green"}">
+          ${pct >= 100 ? "Limit reached" : pct >= 80 ? "Approaching limit" : "On track"} · ${Math.round(pct)}%
+        </span>
+      </div>`;
+    }).join("")}</div>` : emptyCard(
+      "◷",
+      "Your budget starts here",
+      "Create a category limit to track your spending.",
+      `<button class="primary-btn" data-action="add-budget">Create your first budget</button>`
+    )}
+
+    <p class="muted" style="font-size:12px;margin-top:18px">
+      Budget usage is calculated from expenses in the selected month. Alerts are shown in this app; push notifications are not configured.
+    </p>`;
+}
+
+function goalsPage() {
+  return `${pageHeader(
+    "Savings Goals",
+    "Make progress towards things that matter.",
+    `<button class="primary-btn" data-action="add-goal">+ New goal</button>`
+  )}
+    ${state.goals.length ? `<div class="grid grid-2">${state.goals.map(g => {
+      const pct = num(g.target) > 0 ? num(g.saved) / num(g.target) * 100 : 0;
+
+      return `<div class="card">
+        <div class="row-between">
+          <div>
+            <div class="eyebrow">Savings goal</div>
+            <h2 style="margin-top:8px">${esc(g.name)}</h2>
+            <small>${g.date ? "Target date: " + fmtDate(g.date) : "No target date"}</small>
+          </div>
+          <div class="goal-circle" style="--progress:${Math.min(100, pct)}%">
+            <span>${Math.round(pct)}%</span>
+          </div>
+        </div>
+        <div class="small-number" style="margin-top:20px">${money(g.saved)}</div>
+        <small>of ${money(g.target)}</small>
+        <div class="progress-track">
+          <div class="progress-fill" style="width:${Math.min(100, pct)}%"></div>
+        </div>
+        <div class="inline">
+          <button class="primary-btn" data-action="contribute-goal" data-id="${esc(g.id)}">+ Add savings</button>
+          <button class="ghost-btn" data-action="edit-goal" data-id="${esc(g.id)}">Edit</button>
+          <button class="ghost-btn" data-action="delete-goal" data-id="${esc(g.id)}">×</button>
+        </div>
+        ${pct >= 100 ? `<p class="positive" style="margin-top:14px">Goal reached. Well done!</p>` : ""}
+      </div>`;
+    }).join("")}</div>` : emptyCard(
+      "◎",
+      "Give your money a goal",
+      "Create a goal, choose a target, and track each contribution.",
+      `<button class="primary-btn" data-action="add-goal">Create a savings goal</button>`
+    )}
+
+    <p class="muted" style="font-size:12px;margin-top:17px">
+      Goal contributions are tracked separately and do not move account balances unless you record the related transaction.
+    </p>`;
+}
+
+function calculateEMI(principal, annualRate, months) {
+  const p = Math.max(0, num(principal));
+  const n = Math.max(0, Math.floor(num(months)));
+  const r = Math.max(0, num(annualRate)) / 1200;
+
+  if (!p || !n) return 0;
+  if (!r) return p / n;
+
+  const pow = Math.pow(1 + r, n);
+  return p * r * pow / (pow - 1);
+}
+
+function loansPage() {
+  return `${pageHeader(
+    "Loans & EMI",
+    "Track balances, repayments and estimated monthly payments.",
+    `<button class="primary-btn" data-action="add-loan">+ Add loan</button>`
+  )}
+    ${state.loans.length ? `<div class="grid grid-2">${state.loans.map(l => {
+      const paid = num(l.paid);
+      const principal = num(l.principal);
+      const remaining = Math.max(0, principal - paid);
+      const pct = principal > 0 ? Math.min(100, paid / principal * 100) : 0;
+      const emi = calculateEMI(remaining, l.rate, l.months);
+
+      return `<div class="card">
+        <div class="row-between">
+          <div>
+            <div class="eyebrow">Loan account</div>
+            <h2 style="margin-top:8px">${esc(l.name)}</h2>
+          </div>
+          <span class="pill">${num(l.rate)}% p.a.</span>
+        </div>
+        <div class="eyebrow" style="margin-top:20px">Outstanding (simple tracking)</div>
+        <div class="big-number" style="font-size:30px;margin:7px 0">${money(remaining)}</div>
+        <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <div class="row-between">
+          <small>${money(paid)} tracked as repaid</small>
+          <small>${Math.round(pct)}%</small>
+        </div>
+        <div class="grid grid-2" style="margin-top:18px;gap:10px">
+          <div><small>Estimated EMI</small><div style="font-weight:800;margin-top:5px">${money(emi)}</div></div>
+          <div><small>Term</small><div style="font-weight:800;margin-top:5px">${esc(l.months)} months</div></div>
+        </div>
+        <div class="inline" style="margin-top:20px">
+          <button class="primary-btn" data-action="repay-loan" data-id="${esc(l.id)}">Record repayment</button>
+          <button class="ghost-btn" data-action="delete-loan" data-id="${esc(l.id)}">Remove</button>
+        </div>
+        <p class="muted" style="font-size:11px;margin-top:14px">Repayments reduce the tracked principal here. This is not a lender statement.</p>
+      </div>`;
+    }).join("")}</div>` : emptyCard(
+      "⌁",
+      "Keep your loans organized",
+      "Add the principal, interest rate and term to estimate an EMI.",
+      `<button class="primary-btn" data-action="add-loan">Add a loan</button>`
+    )}
+
+    <div class="card" style="margin-top:20px">
+      <h2>EMI calculator</h2>
+      <p class="muted">Estimate a standard monthly payment.</p>
+      <div class="form-grid">
+        <div class="field"><label for="emi-principal">Loan amount</label><input id="emi-principal" type="number" min="0" placeholder="e.g. 100000"></div>
+        <div class="field"><label for="emi-rate">Annual interest (%)</label><input id="emi-rate" type="number" min="0" step=".01" placeholder="e.g. 9"></div>
+        <div class="field"><label for="emi-months">Term (months)</label><input id="emi-months" type="number" min="1" placeholder="e.g. 24"></div>
+      </div>
+      <div class="row-between" style="margin-top:18px">
+        <span class="muted">Estimated monthly EMI</span>
+        <strong id="emi-result" class="small-number">—</strong>
+      </div>
+    </div>`;
+}
+
+function recurringPage() {
+  return `${pageHeader(
+    "Recurring Payments",
+    "Keep an organized list of repeated bills and income.",
+    `<button class="primary-btn" data-action="add-recurring">+ Add schedule</button>`
+  )}
+    ${state.recurring.length ? `<div class="grid grid-2">${state.recurring.map(r => `
+      <div class="card">
+        <div class="row-between">
+          <div class="mini-icon">${r.type === "income" ? "↙" : "↗"}</div>
+          <span class="pill ${r.type === "income" ? "green" : "red"}">${esc(r.type)}</span>
+        </div>
+        <h2 style="margin-top:15px">${esc(r.title)}</h2>
+        <div class="big-number" style="font-size:27px">${money(r.amount)}</div>
+        <p class="muted">${esc(r.category)} · ${esc(r.frequency)}</p>
+        <div class="row-between">
+          <small>Next due: ${fmtDate(r.nextDate)}</small>
+          <span class="pill">${esc(r.status || "scheduled")}</span>
+        </div>
+        <div class="inline" style="margin-top:17px">
+          <button class="primary-btn" data-action="record-recurring" data-id="${esc(r.id)}">Record now</button>
+          <button class="ghost-btn" data-action="toggle-recurring" data-id="${esc(r.id)}">${r.status === "paused" ? "Resume" : "Pause"}</button>
+          <button class="ghost-btn" data-action="delete-recurring" data-id="${esc(r.id)}">×</button>
+        </div>
+      </div>`).join("")}</div>` : emptyCard(
+      "⟳",
+      "Plan recurring payments",
+      "Add rent, subscriptions, regular bills or recurring income.",
+      `<button class="primary-btn" data-action="add-recurring">Add a schedule</button>`
+    )}
+
+    <p class="muted" style="font-size:12px;margin-top:18px">
+      Schedules do not automatically deduct money or send notifications. Use “Record now” when a payment actually happens.
+    </p>`;
+}
+
+function scannerPage() {
+  return `${pageHeader(
+    "Receipt Scanner",
+    "Upload a receipt image and review the details before saving.",
+    `<button class="primary-btn" data-action="choose-receipt">↑ Upload receipt</button>`
+  )}
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="mini-icon">▧</div>
+        <h2 style="margin-top:17px">Receipt capture</h2>
+        <p class="muted">Choose an image from your device. You can then enter or correct the details manually.</p>
+        <button class="primary-btn full-btn" data-action="choose-receipt">Choose receipt image</button>
+        <div id="receipt-preview" style="margin-top:15px">
+          ${scannerImage
+            ? `<img class="scanner-preview" src="${scannerImage}" alt="Selected receipt">`
+            : `<div class="empty-state"><div class="empty-icon">▤</div><p>No receipt selected.</p></div>`}
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Review expense</h2>
+        <p class="muted">The image is not automatically read in this version. Enter the information below and check it before saving.</p>
+        <form id="receipt-form" class="form-grid">
+          <div class="field full"><label for="receipt-title">Merchant or description</label><input id="receipt-title" name="title" required placeholder="e.g. Grocery shop"></div>
+          <div class="field"><label for="receipt-amount">Total amount</label><input id="receipt-amount" name="amount" type="number" min=".01" step=".01" required></div>
+          <div class="field"><label for="receipt-date">Date</label><input id="receipt-date" name="date" type="date" value="${today()}" required></div>
+          <div class="field"><label for="receipt-category">Category</label><select id="receipt-category" name="category">${categoryOptions("Food")}</select></div>
+          <div class="field"><label for="receipt-account">Account</label><select id="receipt-account" name="accountId">${accountOptions()}</select></div>
+          <div class="field full"><button class="primary-btn full-btn" type="submit">Save as expense</button></div>
+        </form>
+      </div>
+    </div>`;
+}
+
+function analyticsPage() {
+  const income = totalIncome();
+  const expenses = totalExpenses();
+  const categoryTotals = {};
+
+  state.transactions.filter(t => t.type === "expense").forEach(t => {
+    categoryTotals[t.category] = (categoryTotals[t.category] || 0) + num(t.amount);
   });
 
-  const titles = {
-    dashboard: "Your financial universe.",
-    transactions: "Every move, accounted for.",
-    wallets: "Your money, in one place.",
-    budgets: "Give every rupee a purpose.",
-    goals: "Small steps. Bigger dreams.",
-    loans: "Your repayment command centre.",
-    recurring: "Stay ahead of regular payments.",
-    receipts: "Turn receipts into records.",
-    analytics: "Understand your money.",
-    reports: "Your numbers, clearly presented.",
-    pro: "Unlock your next level.",
-    settings: "Make FINOVA yours."
+  const categories = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(1, ...categories.map(x => x[1]));
+
+  return `${pageHeader(
+    "Analytics & Reports",
+    "Understand your spending using your recorded data.",
+    `<button class="secondary-btn" data-action="export-csv">Export CSV</button>`
+  )}
+    <div class="grid grid-3">
+      <div class="card"><div class="eyebrow">Recorded income</div><div class="small-number positive" style="margin-top:10px">${money(income)}</div></div>
+      <div class="card"><div class="eyebrow">Recorded expenses</div><div class="small-number negative" style="margin-top:10px">${money(expenses)}</div></div>
+      <div class="card"><div class="eyebrow">Net cash flow</div><div class="small-number ${income - expenses >= 0 ? "positive" : "negative"}" style="margin-top:10px">${money(income - expenses)}</div></div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:18px">
+      <div class="card">
+        <h2>Income trend</h2>
+        <p class="muted">Last six calendar months</p>
+        ${chartMarkup()}
+      </div>
+      <div class="card">
+        <h2>Expenses by category</h2>
+        <p class="muted">Across all recorded transactions</p>
+        ${categories.length ? categories.map(([cat, amount]) => `
+          <div style="margin:17px 0">
+            <div class="row-between"><span>${esc(cat)}</span><strong>${money(amount)}</strong></div>
+            <div class="progress-track"><div class="progress-fill" style="width:${amount / max * 100}%"></div></div>
+          </div>`).join("") : `<div class="empty-state"><div class="empty-icon">▥</div><p>No expense data yet.</p></div>`}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <div class="row-between">
+        <div><h2>Account balances</h2><p class="muted">Current totals by account</p></div>
+        <button class="secondary-btn" data-action="export-backup">Backup JSON</button>
+      </div>
+      ${state.accounts.map(a => `
+        <div class="settings-row">
+          <div><strong>${esc(a.name)}</strong><p>${esc(a.type)}</p></div>
+          <strong>${money(a.balance)}</strong>
+        </div>`).join("")}
+    </div>
+
+    <p class="muted" style="font-size:12px;margin-top:16px">
+      Reports reflect data saved in this browser, not live bank data. PDF export and automatic bank synchronization are not configured.
+    </p>`;
+}
+
+function proPage() {
+  const m = membershipInfo();
+
+  return `${pageHeader("FINOVA Pro", "More insight for your financial journey.")}
+    ${membershipCard()}
+
+    <div class="section-heading">
+      <h2>Choose your plan</h2>
+      <span class="pill">${m.tier === "free" ? "Free plan active" : "Membership active"}</span>
+    </div>
+
+    <div class="grid grid-3">
+      <div class="card plan-card">
+        <span class="pill">CURRENT STARTER</span>
+        <h2 style="margin-top:15px">Free</h2>
+        <div class="plan-price">₹0</div>
+        <p class="muted">Start managing your money.</p>
+        <ul class="benefit-list">
+          <li>Transactions and accounts</li>
+          <li>Budgets and savings goals</li>
+          <li>Loan and recurring trackers</li>
+          <li>Basic reports and CSV export</li>
+          <li>Local device data</li>
+        </ul>
+        <button class="secondary-btn full-btn" disabled>Included</button>
+      </div>
+
+      <div class="card plan-card ${m.tier === "platinum-monthly" ? "selected" : ""}">
+        <span class="pill">PLATINUM</span>
+        <h2 style="margin-top:15px">Monthly</h2>
+        <div class="plan-price">₹99 <small>/ month</small></div>
+        <p class="muted">Premium tools, billed monthly when payments are integrated.</p>
+        <ul class="benefit-list">
+          <li>Platinum membership card theme</li>
+          <li>Advanced report experience</li>
+          <li>Detailed category insights</li>
+          <li>Premium visual themes</li>
+          <li>Enhanced money summaries</li>
+        </ul>
+        <button class="primary-btn full-btn" data-action="subscribe" data-tier="platinum-monthly">Choose monthly</button>
+      </div>
+
+      <div class="card plan-card ${m.tier === "gold-yearly" ? "selected" : ""}">
+        <span class="pill gold">GOLD · YEARLY</span>
+        <h2 style="margin-top:15px">Annual</h2>
+        <div class="plan-price">₹1,169 <small>/ year</small></div>
+        <p class="muted">A yearly plan, billed annually when payments are integrated.</p>
+        <ul class="benefit-list">
+          <li>Gold membership card theme</li>
+          <li>All planned Platinum benefits</li>
+          <li>Premium visual themes</li>
+          <li>Detailed annual money summaries</li>
+          <li>One yearly plan</li>
+        </ul>
+        <button class="primary-btn full-btn" data-action="subscribe" data-tier="gold-yearly">Choose yearly</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px">
+      <h2>About membership</h2>
+      <p class="muted">Selecting a plan currently shows a setup message; it does not charge money or unlock paid services. To sell subscriptions, connect verified purchases through Google Play Billing for Android and a supported payment provider for the website. Never mark a customer as paid based only on a button click.</p>
+    </div>`;
+}
+
+function settingsPage() {
+  return `${pageHeader("Settings", "Your profile, preferences and data controls.")}
+    <div class="grid grid-2">
+      <div class="card">
+        <h2>Profile</h2>
+        <p class="muted">Manage your personal app preferences.</p>
+        <form id="profile-form" class="form-grid">
+          <div class="field full">
+            <label for="settings-name">Name</label>
+            <input id="settings-name" name="name" required value="${esc(state.profile?.name || "")}">
+          </div>
+          <div class="field">
+            <label for="settings-age">Age</label>
+            <input id="settings-age" name="age" type="number" min="1" max="120" value="${esc(state.profile?.age || "")}">
+          </div>
+          <div class="field">
+            <label for="settings-currency">Currency</label>
+            <select id="settings-currency" name="currency">
+              ${[["INR", "INR — Indian Rupee"], ["USD", "USD — US Dollar"], ["GBP", "GBP — British Pound"], ["EUR", "EUR — Euro"], ["AED", "AED — UAE Dirham"], ["CAD", "CAD — Canadian Dollar"]]
+                .map(([v, l]) => `<option value="${v}" ${state.currency === v ? "selected" : ""}>${l}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field full"><button class="primary-btn full-btn" type="submit">Save profile</button></div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Appearance</h2>
+        <div class="settings-row">
+          <div><strong>Light theme</strong><p>Switch between light and midnight themes.</p></div>
+          <input id="theme-toggle" class="switch" type="checkbox" ${state.theme === "light" ? "checked" : ""} aria-label="Enable light theme">
+        </div>
+        <div class="settings-row">
+          <div><strong>Hide balances</strong><p>Hide displayed amounts on this device.</p></div>
+          <input id="balance-toggle" class="switch" type="checkbox" ${state.balanceHidden ? "checked" : ""} aria-label="Hide balances">
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Backup & restore</h2>
+        <p class="muted">Export a backup file and keep it somewhere safe. It may contain sensitive financial information.</p>
+        <div class="grid grid-2">
+          <button class="secondary-btn" data-action="export-backup">Export backup</button>
+          <button class="secondary-btn" data-action="import-backup">Restore backup</button>
+        </div>
+        <input type="file" id="backup-file" accept=".json,application/json" hidden>
+      </div>
+
+      <div class="card">
+        <h2>Membership</h2>
+        <p class="muted">Review your plan and subscription information.</p>
+        <div class="row-between">
+          <strong>${esc(membershipInfo().label)}</strong>
+          <button class="secondary-btn" data-page="pro">View Pro</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:15px">Manage real subscriptions through the store or payment provider used for purchase. This prototype cannot verify or cancel a real subscription.</p>
+      </div>
+
+      <div class="card">
+        <h2>Privacy & data</h2>
+        <p class="muted">Your current prototype saves information in this browser. Clearing browser storage can erase it. Export a backup before deleting data.</p>
+        <button class="danger-btn" data-action="clear-data">Delete all local app data</button>
+      </div>
+
+      <div class="card">
+        <h2>About FINOVA</h2>
+        <p class="muted">A personal money management prototype. Not a bank, financial adviser, or payment processor.</p>
+        <div class="row-between"><span>Version</span><strong>1.0.0</strong></div>
+        <div class="row-between" style="margin-top:13px"><span>Storage</span><span class="pill">This browser</span></div>
+      </div>
+    </div>`;
+}
+
+function onboardingPage() {
+  return `<div class="onboarding">
+    <div class="onboarding-logo">
+      <div class="brand-mark">F</div>
+      <div class="brand">FINOVA</div>
+    </div>
+
+    <div class="onboarding-content">
+      <div class="eyebrow">A calmer way to manage money</div>
+      <h1 style="font-size:clamp(36px,7vw,58px);margin-top:17px">Your money.<br><span class="positive">Your future.</span></h1>
+      <p class="muted" style="max-width:470px">One clear space for your spending, savings, accounts and goals. Start with your profile and make it yours.</p>
+      <div class="onboarding-points">
+        <span>✓ Simple overview</span>
+        <span>✓ Eight focused tools</span>
+        <span>✓ Private local storage</span>
+      </div>
+    </div>
+
+    <div class="card onboarding-form-card">
+      <h2>Let's set up your space</h2>
+      <p class="muted">You can change these details later in Settings.</p>
+      <form id="onboarding-form" class="form-grid">
+        <div class="field full">
+          <label for="onboard-name">What should we call you?</label>
+          <input id="onboard-name" name="name" required maxlength="60" placeholder="Your name">
+        </div>
+        <div class="field">
+          <label for="onboard-age">Age (optional)</label>
+          <input id="onboard-age" name="age" type="number" min="1" max="120" placeholder="Your age">
+        </div>
+        <div class="field">
+          <label for="onboard-currency">Preferred currency</label>
+          <select id="onboard-currency" name="currency">
+            <option value="INR">INR — Indian Rupee</option>
+            <option value="USD">USD — US Dollar</option>
+            <option value="GBP">GBP — British Pound</option>
+            <option value="EUR">EUR — Euro</option>
+            <option value="AED">AED — UAE Dirham</option>
+            <option value="CAD">CAD — Canadian Dollar</option>
+          </select>
+        </div>
+        <div class="field full">
+          <button class="primary-btn full-btn" type="submit">Continue to FINOVA →</button>
+        </div>
+      </form>
+      <small>Your details are stored in this browser. Do not enter passwords or bank login credentials.</small>
+    </div>
+  </div>`;
+}
+
+function renderSidebar() {
+  return `<div class="menu-backdrop" data-action="close-menu" ${menuOpen ? "" : "hidden"}></div>
+    <aside class="sidebar ${menuOpen ? "open" : ""}" aria-label="Main navigation">
+      <div class="sidebar-head">
+        <div class="brand"><div class="brand-mark">F</div> FINOVA</div>
+        <button class="icon-btn" data-action="close-menu" aria-label="Close menu">×</button>
+      </div>
+      <div class="sidebar-label">Workspace</div>
+      <nav class="nav-list">
+        <button class="nav-item ${currentPage === "dashboard" ? "active" : ""}" data-page="dashboard"><span class="nav-emoji">⌂</span>Dashboard</button>
+        ${NAV.map(([id, icon, label]) => `<button class="nav-item ${currentPage === id ? "active" : ""}" data-page="${id}"><span class="nav-emoji">${icon}</span>${label}</button>`).join("")}
+      </nav>
+      <div class="sidebar-label">Membership</div>
+      <nav class="nav-list">
+        <button class="nav-item ${currentPage === "pro" ? "active" : ""}" data-page="pro">
+          <span class="nav-emoji">✧</span>FINOVA Pro
+          <span class="pill gold" style="margin-left:auto">PRO</span>
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <button class="nav-item ${currentPage === "settings" ? "active" : ""}" data-page="settings"><span class="nav-emoji">⚙</span>Settings</button>
+        <div style="padding:13px 10px;color:var(--muted);font-size:11px">Made for clearer money decisions.</div>
+      </div>
+    </aside>`;
+}
+
+function renderApp() {
+  const app = document.getElementById("app");
+  if (!app) return;
+
+  document.body.classList.toggle("light", state.theme === "light");
+
+  if (!state.onboardingDone || !state.profile) {
+    app.innerHTML = onboardingPage();
+    return;
+  }
+
+  const pageMap = {
+    dashboard: dashboardPage,
+    transactions: transactionsPage,
+    accounts: accountsPage,
+    budgets: budgetsPage,
+    goals: goalsPage,
+    loans: loansPage,
+    recurring: recurringPage,
+    scanner: scannerPage,
+    analytics: analyticsPage,
+    pro: proPage,
+    settings: settingsPage
   };
 
-  $("currentSection").textContent = page.charAt(0).toUpperCase() + page.slice(1);
-  $("pageHeading").textContent = titles[page];
-  renderPage();
+  const page = (pageMap[currentPage] || dashboardPage)();
+
+  app.innerHTML = `${renderSidebar()}
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn" data-action="toggle-menu" aria-label="Open navigation menu">☰</button>
+          <div class="brand"><div class="brand-mark">F</div><span>FINOVA</span></div>
+        </div>
+        <div class="topbar-right">
+          <div style="text-align:right">
+            <div class="topbar-label">Welcome back</div>
+            <div class="topbar-name">${esc(state.profile.name || "Member")}</div>
+          </div>
+          <button class="profile-chip" data-page="settings" aria-label="Open profile settings">${esc((state.profile.name || "F").trim().charAt(0).toUpperCase())}</button>
+        </div>
+      </header>
+      <main class="layout"><section class="page">${page}</section></main>
+    </div>`;
+
+  if (scannerImage && currentPage === "scanner") {
+    const preview = document.getElementById("receipt-preview");
+    if (preview) {
+      preview.innerHTML = `<img class="scanner-preview" src="${scannerImage}" alt="Selected receipt">`;
+    }
+  }
+}
+
+function goTo(page) {
+  const valid = ["dashboard", ...NAV.map(x => x[0]), "pro", "settings"];
+  if (!valid.includes(page)) return;
+
+  currentPage = page;
+  menuOpen = false;
+  renderApp();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function renderPage() {
-  const content = $("pageContent");
-  const pages = {
-    dashboard: renderDashboard,
-    transactions: renderTransactions,
-    wallets: renderWallets,
-    budgets: renderBudgets,
-    goals: renderGoals,
-    loans: renderLoans,
-    recurring: renderRecurring,
-    receipts: renderReceipts,
-    analytics: renderAnalytics,
-    reports: renderReports,
-    pro: renderPro,
-    settings: renderSettings
-  };
-  content.innerHTML = pages[currentPage]();
-}
+function showModal(title, content) {
+  modalType = "";
+  document.querySelector(".modal-backdrop")?.remove();
 
-function stat(label, value, icon, color, foot) {
-  return `<article class="stat-card" style="--accent:${color};--glow:${color}20">
-    <div class="stat-top"><span class="stat-label">${label}</span><span class="stat-icon">${icon}</span></div>
-    <div class="stat-value">${value}</div>
-    <div class="stat-foot">${foot}</div>
-  </article>`;
-}
-
-function panel(title, subtitle, content, action = "") {
-  return `<section class="panel">
-    <div class="panel-head"><div><h3>${title}</h3>${subtitle ? `<p>${subtitle}</p>` : ""}</div>${action}</div>
-    ${content}
-  </section>`;
-}
-
-function emptyState(icon, title, message, button, action) {
-  return `<div class="empty-state"><div class="empty-icon">${icon}</div>
-    <strong>${title}</strong><p>${message}</p>
-    ${button ? `<button class="btn btn-secondary" data-action="${action}">${button}</button>` : ""}
-  </div>`;
-}
-
-function recentTransactions(limit = 6) {
-  const tx = [...data.transactions].sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id.localeCompare(a.id)).slice(0, limit);
-  if (!tx.length) return emptyState("⇄", "Your story starts here", "Add your first income or expense to see activity.", "Add transaction", "add-transaction");
-
-  return `<div class="table-wrap"><table><thead><tr><th>DETAILS</th><th>DATE</th><th>AMOUNT</th></tr></thead><tbody>
-    ${tx.map(t => `<tr>
-      <td><div class="item-main"><span class="item-icon">${t.type === "income" ? "↙" : "↗"}</span>
-        <div><strong>${esc(t.title)}</strong><small>${esc(t.category)}</small></div></div></td>
-      <td>${esc(t.date)}</td>
-      <td class="amount ${t.type === "income" ? "positive" : "negative"}">${t.type === "income" ? "+" : "−"}${money(t.amount)}</td>
-    </tr>`).join("")}
-    </tbody></table></div>`;
-}
-
-function categorySpending(transactions) {
-  const map = {};
-  transactions.filter(t => t.type === "expense").forEach(t => {
-    map[t.category] = (map[t.category] || 0) + number(t.amount);
-  });
-  return Object.entries(map).sort((a,b) => b[1] - a[1]);
-}
-
-const chartColors = ["#58f1e3","#9a7cff","#ef8dff","#63edb0","#ffbf69","#7fa5ff","#ff7895","#7ce0d0"];
-
-function spendingDonut(transactions) {
-  const cats = categorySpending(transactions);
-  const total = sum(cats, c => c[1]);
-  if (!total) return emptyState("◉", "No spending data yet", "Record expenses to generate your breakdown.");
-
-  let cursor = 0;
-  const stops = cats.map((c, i) => {
-    const start = cursor;
-    cursor += c[1] / total * 360;
-    return `${chartColors[i % chartColors.length]} ${start}deg ${cursor}deg`;
-  }).join(", ");
-
-  return `<div class="donut-layout">
-    <div class="donut" style="background:conic-gradient(${stops})">
-      <div class="donut-center"><strong>${money(total)}</strong><small>Total spent</small></div>
-    </div>
-    <div class="legend">${cats.slice(0,6).map((c,i) => `<div class="legend-row">
-      <span class="legend-dot" style="background:${chartColors[i % chartColors.length]}"></span>
-      <span>${esc(c[0])}</span><strong>${Math.round(c[1]/total*100)}%</strong>
-    </div>`).join("")}</div>
-  </div>`;
-}
-
-function renderDashboard() {
-  const all = totals();
-  const m = monthTotals();
-  const wallet = data.wallets[0];
-  const balance = all.walletTotal;
-  const monthlySaved = m.income - m.expenses;
-  const budgets = data.budgets.slice(0, 3);
-  const budgetHTML = budgets.length ? budgets.map(b => {
-    const spent = sum(monthTransactions().filter(t => t.type === "expense" && t.category === b.category), t => t.amount);
-    const pct = b.limit > 0 ? Math.min(100, spent / b.limit * 100) : 0;
-    return `<div style="margin-bottom:18px">
-      <div class="progress-line"><strong>${esc(b.category)}</strong><span>${money(spent)} / ${money(b.limit)}</span></div>
-      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;${pct>=100?"background:var(--red)":""}"></div></div>
-    </div>`;
-  }).join("") : emptyState("◉","No budgets yet","Create a budget to monitor category spending.","Create budget","add-budget");
-
-  return `
-    <div class="inline-actions" style="justify-content:space-between;margin-bottom:17px">
-      <span class="pill cyan"><span class="live-dot"></span> YOUR MONEY OVERVIEW</span>
-      <button class="btn btn-primary" data-action="add-transaction">＋ Add transaction</button>
-    </div>
-    <div class="grid grid-4">
-      ${stat("Total wallet balance",money(balance),"▣","#58f1e3",`${data.wallets.length} wallet(s) tracked`)}
-      ${stat("Income this month",money(m.income),"↙","#63edb0","Recorded this month")}
-      ${stat("Expenses this month",money(m.expenses),"↗","#ff7895","Recorded this month")}
-      ${stat("Net this month",money(monthlySaved),"⌁","#9a7cff",monthlySaved>=0?"Income minus expenses":"Expenses exceed income")}
-    </div>
-
-    <div class="grid grid-2 section-gap">
-      <section class="bank-card">
-        <div class="bank-card-top"><span class="eyebrow" style="color:#fff">FINOVA · VIRTUAL CARD</span><span class="card-contactless">)))</span></div>
-        <div class="card-balance"><small>TRACKED WALLET BALANCE</small><strong>${money(balance)}</strong></div>
-        <div class="bank-card-bottom"><div><span class="card-number">•••• &nbsp;•••• &nbsp;•••• &nbsp;${String(wallet?.id || "0000").replace(/\W/g,"").slice(-4).padStart(4,"0")}</span><span class="card-holder">${esc(data.profile?.name || "FINOVA USER").toUpperCase()}</span></div><span class="card-network">F</span></div>
-        <div class="card-decor"></div>
-      </section>
-      ${panel("Your money snapshot","All-time totals",
-        `<div class="progress-line"><span>Total income</span><strong class="positive">${money(all.income)}</strong></div>
-         <div class="progress-line"><span>Total expenses</span><strong class="negative">${money(all.expenses)}</strong></div>
-         <div class="progress-line"><span>Saved towards goals</span><strong>${money(all.savedGoals)}</strong></div>
-         <div class="progress-line"><span>Remaining loan principal</span><strong>${money(all.debt)}</strong></div>
-         <div class="notice" style="margin-top:15px">Your balance uses the opening balances you entered plus recorded transactions. It is not a live bank balance.</div>`)}
-    </div>
-
-    <div class="grid grid-2 section-gap">
-      ${panel("Spending intelligence","This month's expense categories",spendingDonut(monthTransactions()),`<button class="mini-link" data-page="analytics">View insights ↗</button>`)}
-      ${panel("Budget radar","Keep your spending on track",budgetHTML,`<button class="mini-link" data-action="add-budget">＋ Add</button>`)}
-    </div>
-
-    <div class="section-gap">
-      ${panel("Recent activity","Your latest recorded money movements",recentTransactions(),`<button class="mini-link" data-page="transactions">All transactions ↗</button>`)}
-    </div>
-    <div class="grid grid-3 section-gap">
-      <article class="feature-card"><div class="feature-icon">◎</div><h3>Savings goals</h3><p>${data.goals.length ? `${data.goals.length} goal(s) in progress.` : "Create a goal and track your progress."}</p><button class="mini-link" data-page="goals">Open goals →</button></article>
-      <article class="feature-card"><div class="feature-icon">↗</div><h3>Loan control</h3><p>${data.loans.length ? `${data.loans.length} loan(s) being tracked.` : "Track repayments and estimated EMI."}</p><button class="mini-link" data-page="loans">Open loans →</button></article>
-      <article class="feature-card"><div class="feature-icon">✦</div><h3>FINOVA Pro</h3><p>Explore premium tools and reporting features.</p><button class="mini-link" data-page="pro">Explore Pro →</button></article>
-    </div>`;
-}
-
-function renderTransactions() {
-  const rows = [...data.transactions].sort((a,b) => (b.date || "").localeCompare(a.date || "")).map(t => `
-    <tr>
-      <td><div class="item-main"><span class="item-icon">${t.type==="income"?"↙":"↗"}</span><div><strong>${esc(t.title)}</strong><small>${esc(t.category)} · ${esc(data.wallets.find(w=>w.id===t.walletId)?.name || "Wallet removed")}</small></div></div></td>
-      <td>${esc(t.date)}</td>
-      <td><span class="pill">${esc(t.type)}</span></td>
-      <td class="amount ${t.type==="income"?"positive":"negative"}">${t.type==="income"?"+":"−"}${money(t.amount)}</td>
-      <td><button class="small-btn" data-action="delete-tx" data-id="${esc(t.id)}">Delete</button></td>
-    </tr>`).join("");
-
-  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px">
-    <span class="muted">${data.transactions.length} recorded transaction(s)</span>
-    <button class="btn btn-primary" data-action="add-transaction">＋ Add transaction</button>
-  </div>
-  ${panel("Transaction ledger","Only entries you have saved appear here",
-    rows ? `<div class="table-wrap"><table><thead><tr><th>TRANSACTION</th><th>DATE</th><th>TYPE</th><th>AMOUNT</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : emptyState("⇄","Nothing recorded yet","Add your first transaction to start tracking.","Add transaction","add-transaction"))}`;
-}
-
-function renderWallets() {
-  const all = totals();
-  const cards = data.wallets.map((w,i) => `
-    <article class="wallet-card">
-      <div class="wallet-card-head"><span class="wallet-icon">▣</span><span class="pill ${w.frozen?"":"cyan"}">${w.frozen?"Frozen demo":"Active"}</span></div>
-      <h3>${esc(w.name)}</h3><p class="muted">${esc(w.type)} · ${data.transactions.filter(t=>t.walletId===w.id).length} transactions</p>
-      <div class="wallet-balance">${money(walletBalance(w.id))}</div>
-      <div class="bank-card ${esc(w.theme || "card-dark")}" style="min-height:155px;padding:16px;animation:none">
-        <div class="bank-card-top"><span class="eyebrow" style="color:white">FINOVA · DEMO CARD</span><span class="card-chip"></span></div>
-        <div class="card-balance" style="margin:18px 0"><small>TRACKED BALANCE</small><strong style="font-size:22px">${money(walletBalance(w.id))}</strong></div>
-        <div class="bank-card-bottom"><span class="card-number">•••• •••• •••• ${String(i+1).padStart(4,"0")}</span><span class="card-network">F</span></div>
+  document.body.insertAdjacentHTML("beforeend", `<div class="modal-backdrop" data-action="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="modal-head">
+        <h2>${esc(title)}</h2>
+        <button class="icon-btn" data-action="close-modal" aria-label="Close dialog">×</button>
       </div>
-      <div class="inline-actions" style="margin-top:13px">
-        <button class="small-btn" data-action="toggle-wallet" data-id="${esc(w.id)}">${w.frozen?"Unfreeze demo":"Freeze demo"}</button>
-        ${w.id!=="main"?`<button class="small-btn" data-action="delete-wallet" data-id="${esc(w.id)}">Delete</button>`:""}
+      ${content}
+    </div>
+  </div>`);
+}
+
+function openForm(type, id = "") {
+  modalType = type;
+  modalExtra = { id };
+
+  const existing = list => list.find(x => x.id === id) || {};
+  let title = "";
+  let fields = "";
+
+  if (type === "transaction") {
+    const t = existing(state.transactions);
+    title = id ? "Edit transaction" : "Add transaction";
+
+    fields = `<form id="modal-form" data-form="transaction">
+      <div class="form-grid">
+        <div class="field full"><label>Transaction title</label><input name="title" required maxlength="100" value="${esc(t.title || "")}" placeholder="e.g. Groceries"></div>
+        <div class="field"><label>Type</label><select name="type"><option value="expense" ${t.type !== "income" ? "selected" : ""}>Expense</option><option value="income" ${t.type === "income" ? "selected" : ""}>Income</option></select></div>
+        <div class="field"><label>Amount</label><input name="amount" type="number" min=".01" step=".01" required value="${esc(t.amount ?? "")}" placeholder="0.00"></div>
+        <div class="field"><label>Category</label><select name="category">${categoryOptions(t.category || "Food")}</select></div>
+        <div class="field"><label>Account</label><select name="accountId" required>${accountOptions(t.accountId || state.accounts[0]?.id)}</select></div>
+        <div class="field full"><label>Date</label><input name="date" type="date" required value="${esc(t.date || today())}"></div>
       </div>
-    </article>`).join("");
+      <div class="form-actions">
+        <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+        <button class="primary-btn" type="submit">Save transaction</button>
+      </div>
+    </form>`;
+  } else if (type === "account") {
+    const a = existing(state.accounts);
+    title = id ? "Edit account" : "Add account";
 
-  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px">
-    <span class="muted">Tracked total: <strong>${money(all.walletTotal)}</strong></span>
-    <button class="btn btn-primary" data-action="add-wallet">＋ Add wallet</button>
-  </div>
-  <div class="wallet-grid">${cards}</div>
-  <div class="notice section-gap">These are simulated wallet and card displays. They do not create bank accounts, issue payment cards, or connect to a bank. Freezing a card here changes only its demo status.</div>`;
+    fields = `<form id="modal-form" data-form="account"><div class="form-grid">
+      <div class="field full"><label>Account name</label><input name="name" required maxlength="60" value="${esc(a.name || "")}" placeholder="e.g. Savings"></div>
+      <div class="field"><label>Account type</label><select name="type">${["Cash", "Savings", "Bank Account", "Digital Wallet", "Other"].map(v => `<option ${a.type === v ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+      <div class="field"><label>Card design</label><select name="color">${[["green", "Emerald"], ["silver", "Silver"], ["gold", "Gold"], ["purple", "Midnight Purple"]].map(([v, l]) => `<option value="${v}" ${(a.color || "green") === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      ${id ? "" : `<div class="field full"><label>Opening balance</label><input name="balance" type="number" step=".01" value="0" required></div>`}
+    </div>
+    <div class="form-actions">
+      <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+      <button class="primary-btn">Save account</button>
+    </div></form>`;
+  } else if (type === "budget") {
+    title = "Create budget";
+
+    fields = `<form id="modal-form" data-form="budget"><div class="form-grid">
+      <div class="field"><label>Category</label><select name="category">${categoryOptions("Food")}</select></div>
+      <div class="field"><label>Monthly limit</label><input name="limit" type="number" min=".01" step=".01" required placeholder="5000"></div>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+      <button class="primary-btn">Create budget</button>
+    </div></form>`;
+  } else if (type === "goal") {
+    const g = existing(state.goals);
+    title = id ? "Edit savings goal" : "New savings goal";
+
+    fields = `<form id="modal-form" data-form="goal"><div class="form-grid">
+      <div class="field full"><label>Goal name</label><input name="name" required maxlength="80" value="${esc(g.name || "")}" placeholder="e.g. New laptop"></div>
+      <div class="field"><label>Target amount</label><input name="target" type="number" min=".01" step=".01" required value="${esc(g.target ?? "")}" placeholder="20000"></div>
+      <div class="field"><label>${id ? "Saved amount" : "Already saved"}</label><input name="saved" type="number" min="0" step=".01" value="${esc(g.saved || 0)}"></div>
+      <div class="field full"><label>Target date (optional)</label><input name="date" type="date" value="${esc(g.date || "")}"></div>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+      <button class="primary-btn">Save goal</button>
+    </div></form>`;
+  } else if (type === "contribution") {
+    title = "Add to savings";
+
+    fields = `<form id="modal-form" data-form="contribution">
+      <div class="field"><label>Contribution amount</label><input name="amount" type="number" min=".01" step=".01" required placeholder="1000"></div>
+      <div class="form-actions">
+        <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+        <button class="primary-btn">Add contribution</button>
+      </div>
+    </form>`;
+  } else if (type === "loan") {
+    title = "Add loan";
+
+    fields = `<form id="modal-form" data-form="loan"><div class="form-grid">
+      <div class="field full"><label>Loan name</label><input name="name" required maxlength="80" placeholder="e.g. Education loan"></div>
+      <div class="field"><label>Original principal</label><input name="principal" type="number" min=".01" step=".01" required placeholder="100000"></div>
+      <div class="field"><label>Annual interest (%)</label><input name="rate" type="number" min="0" step=".01" required value="0"></div>
+      <div class="field"><label>Term (months)</label><input name="months" type="number" min="1" max="600" required value="12"></div>
+      <div class="field"><label>Already repaid</label><input name="paid" type="number" min="0" step=".01" value="0"></div>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+      <button class="primary-btn">Save loan</button>
+    </div></form>`;
+  } else if (type === "repayment") {
+    title = "Record repayment";
+
+    fields = `<form id="modal-form" data-form="repayment">
+      <div class="field"><label>Amount repaid</label><input name="amount" type="number" min=".01" step=".01" required placeholder="5000"></div>
+      <p class="muted" style="font-size:12px;margin-top:12px">This updates the app's tracked repayment total. It does not make a payment to a lender.</p>
+      <div class="form-actions">
+        <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+        <button class="primary-btn">Record repayment</button>
+      </div>
+    </form>`;
+  } else if (type === "recurring") {
+    title = "Add recurring schedule";
+
+    fields = `<form id="modal-form" data-form="recurring"><div class="form-grid">
+      <div class="field full"><label>Description</label><input name="title" required maxlength="100" placeholder="e.g. Internet bill"></div>
+      <div class="field"><label>Type</label><select name="type"><option value="expense">Expense</option><option value="income">Income</option></select></div>
+      <div class="field"><label>Amount</label><input name="amount" type="number" min=".01" step=".01" required></div>
+      <div class="field"><label>Category</label><select name="category">${categoryOptions("Bills")}</select></div>
+      <div class="field"><label>Account</label><select name="accountId">${accountOptions()}</select></div>
+      <div class="field"><label>Frequency</label><select name="frequency"><option>Weekly</option><option selected>Monthly</option><option>Yearly</option></select></div>
+      <div class="field"><label>Next due date</label><input name="nextDate" type="date" value="${today()}" required></div>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+      <button class="primary-btn">Save schedule</button>
+    </div></form>`;
+  } else if (type === "transfer") {
+    const a = existing(state.accounts);
+    title = "Transfer between accounts";
+
+    fields = `<form id="modal-form" data-form="transfer">
+      <div class="field"><label>From</label><select name="from" required>${accountOptions(a.id)}</select></div>
+      <div class="field" style="margin-top:14px"><label>To</label><select name="to" required>${accountOptions(state.accounts.find(x => x.id !== a.id)?.id || "")}</select></div>
+      <div class="field" style="margin-top:14px"><label>Amount</label><input name="amount" type="number" min=".01" step=".01" required></div>
+      <div class="form-actions">
+        <button type="button" class="secondary-btn" data-action="close-modal">Cancel</button>
+        <button class="primary-btn">Transfer</button>
+      </div>
+    </form>`;
+  }
+
+  showModal(title, fields);
 }
 
-function renderBudgets() {
-  const list = data.budgets.map(b => {
-    const spent = sum(monthTransactions().filter(t=>t.type==="expense" && t.category===b.category),t=>t.amount);
-    const pct = b.limit ? spent/b.limit*100 : 0;
-    const over = spent > b.limit;
-    return `<article class="goal-card">
-      <div class="wallet-card-head"><span class="wallet-icon">◉</span><span class="pill ${over?"":"cyan"}">${over?"Over budget":"Budget"}</span></div>
-      <h3>${esc(b.category)}</h3><div class="wallet-balance">${money(spent)} <small>spent</small></div>
-      <div class="progress-line"><span>Monthly limit</span><strong>${money(b.limit)}</strong></div>
-      <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,pct)}%;${over?"background:var(--red)":""}"></div></div>
-      <div class="progress-line"><span>${Math.round(pct)}% used</span><span>${money(Math.max(0,b.limit-spent))} left</span></div>
-      <button class="small-btn" data-action="delete-budget" data-id="${esc(b.id)}">Delete budget</button>
-    </article>`;
-  }).join("");
-  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Budgets calculate spending from saved expenses this month.</span><button class="btn btn-primary" data-action="add-budget">＋ Create budget</button></div>
-    ${list ? `<div class="goal-grid">${list}</div>` : emptyState("◉","Plan your spending","Set category limits and FINOVA will calculate how much you've used.","Create budget","add-budget")}`;
+function closeModal() {
+  document.querySelector(".modal-backdrop")?.remove();
+  modalType = "";
 }
 
-function renderGoals() {
-  const cards = data.goals.map(g => {
-    const pct = g.target ? g.saved/g.target*100 : 0;
-    return `<article class="goal-card">
-      <div class="wallet-card-head"><span class="goal-emoji">${esc(g.emoji || "◎")}</span><span class="pill purple">${Math.min(100,Math.round(pct))}% complete</span></div>
-      <h3>${esc(g.name)}</h3><p class="muted">${g.deadline ? "Target date: "+esc(g.deadline) : "No target date set"}</p>
-      <div class="wallet-balance">${money(g.saved)} <small>saved</small></div>
-      <div class="progress-line"><span>Target</span><strong>${money(g.target)}</strong></div>
-      <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,pct)}%"></div></div>
-      <div class="inline-actions" style="margin-top:14px"><button class="small-btn" data-action="contribute-goal" data-id="${esc(g.id)}">＋ Add savings</button><button class="small-btn" data-action="delete-goal" data-id="${esc(g.id)}">Delete</button></div>
-    </article>`;
-  }).join("");
-  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Record progress toward your personal targets.</span><button class="btn btn-primary" data-action="add-goal">＋ New goal</button></div>
-    ${cards ? `<div class="goal-grid">${cards}</div>` : emptyState("◎","Dream it. Track it.","Create a savings goal and watch your progress grow.","Create goal","add-goal")}`;
+function updateAccountBalance(accountId, delta) {
+  const a = state.accounts.find(x => x.id === accountId);
+  if (a) a.balance = Math.round((num(a.balance) + num(delta) + Number.EPSILON) * 100) / 100;
 }
 
-function renderLoans() {
-  const cards = data.loans.map(l => {
-    const principal = number(l.principal);
-    const paid = Math.min(principal, number(l.paid));
-    const pct = principal ? paid/principal*100 : 0;
-    const remaining = Math.max(0,principal-paid);
-    const monthlyRate = number(l.rate)/1200;
-    const emi = monthlyRate === 0
-      ? (number(l.term) ? principal/number(l.term) : 0)
-      : (number(l.term) ? principal*monthlyRate*Math.pow(1+monthlyRate,number(l.term))/(Math.pow(1+monthlyRate,number(l.term))-1) : 0);
-    return `<article class="loan-card">
-      <div class="wallet-card-head"><span class="wallet-icon">↗</span><span class="pill ${remaining===0?"cyan":"purple"}">${remaining===0?"Completed":"In progress"}</span></div>
-      <h3>${esc(l.name)}</h3><p class="muted">Interest rate: ${number(l.rate)}% p.a.</p>
-      <div class="wallet-balance">${money(remaining)} <small>principal remaining</small></div>
-      <div class="progress-line"><span>Principal paid</span><strong>${Math.round(pct)}%</strong></div>
-      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-      <div class="progress-line"><span>Recorded payments: ${money(paid)}</span><span>EMI estimate: ${money(emi)}</span></div>
-      <p class="muted tiny">Estimated EMI based on original principal, annual rate and term. Extra fees and lender rules are not included.</p>
-      <div class="inline-actions"><button class="small-btn" data-action="pay-loan" data-id="${esc(l.id)}" ${remaining===0?"disabled":""}>Record EMI payment</button><button class="small-btn" data-action="delete-loan" data-id="${esc(l.id)}">Delete</button></div>
-    </article>`;
-  }).join("");
-  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Record repayments to update your progress.</span><button class="btn btn-primary" data-action="add-loan">＋ Add loan</button></div>
-    ${cards ? `<div class="loan-grid">${cards}</div>` : emptyState("↗","Take control of repayments","Add a loan to estimate EMI and record principal repayments.","Add loan","add-loan")}`;
+function reverseTransaction(t) {
+  if (!t) return;
+  updateAccountBalance(t.accountId, t.type === "income" ? -num(t.amount) : num(t.amount));
 }
 
-function renderRecurring() {
-  const list = data.recurring.map(r => `<tr>
-    <td><div class="item-main"><span class="item-icon">⟳</span><div><strong>${esc(r.name)}</strong><small>${esc(r.category)}</small></div></div></td>
-    <td>${money(r.amount)}</td><td>${esc(r.frequency)}</td><td>${esc(r.nextDate || "Not set")}</td>
-    <td><button class="small-btn" data-action="record-recurring" data-id="${esc(r.id)}">Record expense</button> <button class="small-btn" data-action="delete-recurring" data-id="${esc(r.id)}">Delete</button></td>
-  </tr>`).join("");
-  return `<div class="inline-actions" style="justify-content:space-between;margin-bottom:18px"><span class="muted">Manage recurring items manually. Browser notifications are not enabled.</span><button class="btn btn-primary" data-action="add-recurring">＋ Add recurring</button></div>
-    ${list ? panel("Recurring payments","Use Record expense when a payment occurs.",`<div class="table-wrap"><table><thead><tr><th>ITEM</th><th>AMOUNT</th><th>FREQUENCY</th><th>NEXT DATE</th><th>ACTIONS</th></tr></thead><tbody>${list}</tbody></table></div>`) : emptyState("⟳","No recurring items","Track subscriptions, bills and regular expenses.","Add recurring","add-recurring")}`;
+function applyTransaction(t) {
+  updateAccountBalance(t.accountId, t.type === "income" ? num(t.amount) : -num(t.amount));
 }
 
-function renderReceipts() {
-  const list = data.receipts.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.category)}</td><td>${money(r.amount)}</td><td>${esc(r.date)}</td></tr>`).join("");
-  return `<div class="grid grid-2">
-    <section class="panel">
-      <div class="panel-head"><div><h3>Receipt workspace</h3><p>Choose a receipt photo and review its details.</p></div><span class="feature-icon">▤</span></div>
-      <label class="file-drop" for="receiptFile"><span class="feature-icon">↑</span><strong>Select a receipt image</strong><p>JPG, PNG or another image supported by your browser</p><span class="btn btn-secondary">Choose image</span></label>
-      <input class="hidden" id="receiptFile" type="file" accept="image/*">
-      <img id="receiptPreview" class="receipt-preview hidden" alt="Selected receipt preview">
-      <div class="notice">Selecting a photo does not automatically extract text in this version. Enter the amount and category below to save an accurate record.</div>
-      <form id="receiptForm">
-        <div class="form-group"><label>Merchant or receipt name</label><input id="receiptName" required maxlength="100" placeholder="e.g. Grocery store"></div>
-        <div class="form-row">
-          <div class="form-group"><label>Amount (₹)</label><input id="receiptAmount" type="number" min=".01" step=".01" required placeholder="0.00"></div>
-          <div class="form-group"><label>Category</label><select id="receiptCategory"><option>Food</option><option>Transport</option><option>Shopping</option><option>Bills</option><option>Health</option><option>Education</option><option>Other</option></select></div>
-        </div>
-        <div class="form-group"><label>Date</label><input id="receiptDate" type="date" value="${today()}" required></div>
-        <button class="btn btn-primary full" type="submit">Save receipt and expense</button>
-      </form>
-    </section>
-    <section>${panel("Receipt history","Saved receipts",list ? `<div class="table-wrap"><table><thead><tr><th>NAME</th><th>CATEGORY</th><th>AMOUNT</th><th>DATE</th></tr></thead><tbody>${list}</tbody></table></div>` : emptyState("▤","No receipts saved","Your saved receipts will appear here."))}</section>
-  </div>`;
+function formObject(form) {
+  return Object.fromEntries(new FormData(form).entries());
 }
 
-function renderAnalytics() {
-  const all = totals();
-  const m = monthTotals();
-  const cats = categorySpending(monthTransactions());
-  const top = cats.length ? cats.map((c,i) => {
-    const pct = m.expenses ? c[1]/m.expenses*100 : 0;
-    return `<div class="category-row"><span>${esc(c[0])}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${chartColors[i%chartColors.length]}"></div></div><strong>${money(c[1])}</strong></div>`;
-  }).join("") : emptyState("⌁","Waiting for activity","Add expenses to see category analysis.");
-  const recentMonths = [];
-  for(let i=5;i>=0;i--){
-    const d = new Date();
-    d.setDate(1);
-    d.setMonth(d.getMonth()-i);
-    const key = d.toISOString().slice(0,7);
-    const tx = data.transactions.filter(t => String(t.date).startsWith(key));
-    recentMonths.push({
-      label:d.toLocaleString("en-IN",{month:"short"}),
-      income:sum(tx.filter(t=>t.type==="income"),t=>t.amount),
-      expense:sum(tx.filter(t=>t.type==="expense"),t=>t.amount)
+function submitModal(form, type) {
+  const d = formObject(form);
+  const id = modalExtra.id;
+
+  if (type === "transaction") {
+    const amount = num(d.amount);
+    if (amount <= 0) return notify("Enter an amount greater than zero.");
+
+    const existing = state.transactions.find(t => t.id === id);
+    if (existing) reverseTransaction(existing);
+
+    const t = {
+      id: existing?.id || uid(),
+      title: d.title.trim(),
+      type: d.type,
+      amount,
+      category: d.category,
+      accountId: d.accountId,
+      date: d.date
+    };
+
+    if (!state.accounts.some(a => a.id === t.accountId)) {
+      if (existing) applyTransaction(existing);
+      return notify("Choose a valid account.");
+    }
+
+    if (existing) Object.assign(existing, t);
+    else state.transactions.push(t);
+
+    applyTransaction(t);
+  }
+
+  if (type === "account") {
+    const existing = state.accounts.find(a => a.id === id);
+
+    if (existing) {
+      existing.name = d.name.trim();
+      existing.type = d.type;
+      existing.color = d.color;
+    } else {
+      state.accounts.push({
+        id: uid(),
+        name: d.name.trim(),
+        type: d.type,
+        color: d.color,
+        balance: num(d.balance)
+      });
+    }
+  }
+
+  if (type === "budget") {
+    const limit = num(d.limit);
+    if (limit <= 0) return notify("Enter a budget limit greater than zero.");
+
+    const duplicate = state.budgets.some(
+      b => b.category === d.category && (b.period || monthKey()) === monthKey()
+    );
+
+    if (duplicate) return notify("A budget for this category already exists this month.");
+
+    state.budgets.push({
+      id: uid(),
+      category: d.category,
+      limit,
+      period: monthKey()
     });
   }
-  const max = Math.max(1,...recentMonths.flatMap(x=>[x.income,x.expense]));
-  const bars = recentMonths.map(mo=>`<div style="flex:1;min-width:0;text-align:center">
-    <div style="height:145px;display:flex;align-items:flex-end;justify-content:center;gap:4px;padding:0 2px">
-      <div title="Income ${money(mo.income)}" style="height:${mo.income/max*100}%;width:35%;min-height:${mo.income?3:0}px;border-radius:5px 5px 0 0;background:var(--cyan)"></div>
-      <div title="Expenses ${money(mo.expense)}" style="height:${mo.expense/max*100}%;width:35%;min-height:${mo.expense?3:0}px;border-radius:5px 5px 0 0;background:var(--purple)"></div>
-    </div><small>${mo.label}</small></div>`).join("");
 
-  return `<div class="grid grid-3">
-    ${stat("All-time income",money(all.income),"↙","#63edb0","Recorded income")}
-    ${stat("All-time expenses",money(all.expenses),"↗","#ff7895","Recorded expenses")}
-    ${stat("This month's net",money(m.income-m.expenses),"⌁","#9a7cff","Income minus expenses")}
-  </div>
-  <div class="grid grid-2 section-gap">
-    ${panel("Income vs expenses","Six-month view · recorded data only",`
-      <div class="inline-actions" style="margin-bottom:15px"><span class="pill cyan">● Income</span><span class="pill purple">● Expenses</span></div>
-      <div style="display:flex;align-items:flex-end;gap:10px;padding-top:10px">${bars}</div>`)}
-    ${panel("Where money goes","Current month's expense categories",top)}
-  </div>
-  <div class="notice section-gap">Analytics are based only on the records saved in this browser. FINOVA does not retrieve transactions from your bank.</div>`;
-}
+  if (type === "goal") {
+    const target = num(d.target);
+    const saved = num(d.saved);
 
-function renderReports() {
-  return `<div class="grid grid-2">
-    <section class="panel"><div class="feature-icon">▧</div><h3 style="margin-top:15px">Transaction report</h3><p class="muted">Download your recorded transactions in spreadsheet-friendly CSV format.</p><button class="btn btn-primary full" data-action="export-csv">Export CSV</button></section>
-    <section class="panel"><div class="feature-icon">⬇</div><h3 style="margin-top:15px">Full data backup</h3><p class="muted">Export a JSON copy of your profile, transactions, wallets, goals, loans and settings.</p><button class="btn btn-primary full" data-action="export-json">Download backup</button></section>
-    <section class="panel"><div class="feature-icon">▣</div><h3 style="margin-top:15px">Import backup</h3><p class="muted">Restore a FINOVA JSON backup from a file. This replaces current saved data.</p><input id="backupFile" type="file" accept=".json,application/json"><button class="btn btn-secondary full" style="margin-top:12px" data-action="import-json">Restore selected backup</button></section>
-    <section class="panel"><div class="feature-icon">◉</div><h3 style="margin-top:15px">Quick summary</h3><div class="progress-line"><span>Transactions</span><strong>${data.transactions.length}</strong></div><div class="progress-line"><span>Wallets</span><strong>${data.wallets.length}</strong></div><div class="progress-line"><span>Goals</span><strong>${data.goals.length}</strong></div><div class="progress-line"><span>Loans</span><strong>${data.loans.length}</strong></div></section>
-  </div>
-  <div class="notice section-gap">CSV and JSON exports are generated on your device. Keep backup files private because they can contain your personal financial records.</div>`;
-}
+    if (target <= 0 || saved < 0) return notify("Enter valid goal amounts.");
+    if (saved > target) return notify("Saved amount cannot exceed the target in this version.");
 
-function renderPro() {
-  const features = [
-    "Expanded financial insights and comparisons",
-    "Downloadable reports and data exports",
-    "Advanced budget and goal analysis",
-    "Loan and EMI tracking tools",
-    "Receipt history and finance organisation",
-    "Future premium features as they are implemented"
-  ];
-  return `<section class="hero-panel">
-    <span class="eyebrow">FINOVA PRO · PREMIUM EXPERIENCE</span>
-    <h2>Make every rupee<br><span class="gradient-text">work smarter.</span></h2>
-    <p>Explore the premium plan for people who want a more detailed view of their finances.</p>
-    <span class="pill purple">✦ PREMIUM MEMBERSHIP</span>
-  </section>
-  <div class="price-grid section-gap">
-    <article class="price-card">
-      <span class="eyebrow">MONTHLY PLAN</span><div class="price">₹99<small> / month</small></div>
-      <p class="muted">Flexible monthly pricing.</p>
-      <ul class="check-list">${features.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>
-      <button class="btn btn-secondary full" data-action="pro-checkout">Choose monthly · ₹99</button>
-    </article>
-    <article class="price-card featured">
-      <span class="pill purple">ANNUAL PLAN</span><div class="price">₹1,169<small> / year</small></div>
-      <p class="muted">An annual subscription option.</p>
-      <ul class="check-list">${features.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>
-      <button class="btn btn-pro full" data-action="pro-checkout">Choose annual · ₹1,169</button>
-    </article>
-  </div>
-  <div class="notice section-gap"><strong>Payment setup required:</strong> These are displayed prices, not a completed purchase. Real subscriptions require a secure payment provider or Google Play Billing, purchase verification, and subscription management. This demo does not collect card details or unlock Pro through a fake payment.</div>
-  <div class="section-gap">${panel("Your current membership","Membership status",`<div class="progress-line"><span>Current plan</span><strong>${data.pro?"FINOVA PRO":"FREE"}</strong></div><p class="muted tiny">Pro is not activated by this demo checkout. Do not advertise a paid subscription as live until billing is integrated and tested.</p>`)}</div>`;
-}
+    const existing = state.goals.find(g => g.id === id);
+    const g = {
+      id: existing?.id || uid(),
+      name: d.name.trim(),
+      target,
+      saved,
+      date: d.date
+    };
 
-function renderSettings() {
-  return `<div class="grid grid-2">
-    <section class="panel"><div class="panel-head"><div><h3>Your profile</h3><p>Basic information saved on this device.</p></div><span class="feature-icon">♙</span></div>
-      <div class="settings-row"><div><strong>Name</strong><p>${esc(data.profile?.name || "Not set")}</p></div><button class="small-btn" data-action="edit-profile">Edit</button></div>
-      <div class="settings-row"><div><strong>Age</strong><p>${esc(data.profile?.age ?? "Not set")}</p></div><button class="small-btn" data-action="edit-profile">Edit</button></div>
-    </section>
-    <section class="panel"><div class="panel-head"><div><h3>Storage and privacy</h3><p>Understand where your information lives.</p></div><span class="feature-icon">⌑</span></div>
-      <div class="settings-row"><div><strong>Storage mode</strong><p>Local browser storage on this device</p></div><span class="pill cyan">LOCAL</span></div>
-      <div class="settings-row"><div><strong>Cloud synchronisation</strong><p>Not configured in this version</p></div><span class="pill">OFF</span></div>
-      <div class="settings-row"><div><strong>Export your data</strong><p>Save a backup before clearing browser data.</p></div><button class="small-btn" data-page="reports">Open reports</button></div>
-    </section>
-    <section class="panel"><h3>App information</h3><p class="muted">FINOVA is a personal finance tracking demo. It does not offer bank services, investment execution or financial advice.</p><div class="pill">VERSION 1.0 · BROWSER EDITION</div></section>
-    <section class="panel"><h3>Danger zone</h3><p class="muted">This removes locally stored transactions and settings. Export a backup first if you want to keep them.</p><button class="btn btn-danger" data-action="reset-data">Reset all local data</button></section>
-  </div>`;
-}
-
-/* ---------- Onboarding ---------- */
-
-function showOnboarding() {
-  $("onboarding").classList.remove("hidden");
-  $("app").classList.add("hidden");
-  $("welcomeStep").classList.remove("hidden");
-  $("policyStep").classList.add("hidden");
-  $("profileName").value = data.profile?.name || "";
-  $("profileAge").value = data.profile?.age || "";
-}
-
-function showApp() {
-  $("onboarding").classList.add("hidden");
-  $("app").classList.remove("hidden");
-  updateProfile();
-  setPage("dashboard");
-}
-
-$("welcomeContinue").addEventListener("click", () => {
-  const name = $("profileName").value.trim();
-  const age = Number($("profileAge").value);
-  if (!name) return notify("Enter your name to continue.");
-  if (!Number.isInteger(age) || age < 1 || age > 120) return notify("Enter a valid age.");
-  data.profile = { name, age };
-  saveData();
-  $("welcomeStep").classList.add("hidden");
-  $("policyStep").classList.remove("hidden");
-});
-
-$("backWelcome").addEventListener("click", () => {
-  $("policyStep").classList.add("hidden");
-  $("welcomeStep").classList.remove("hidden");
-});
-
-$("enterApp").addEventListener("click", () => {
-  if (!$("policyConsent").checked) return notify("Please confirm that you have read the information.");
-  data.policyAccepted = true;
-  saveData();
-  showApp();
-});
-
-$("logoutBtn").addEventListener("click", () => {
-  if (confirm("Return to the welcome screen? Your saved data will remain on this device.")) showOnboarding();
-});
-
-/* ---------- Transactions ---------- */
-
-function openTransaction() {
-  $("txDate").value = today();
-  $("txAmount").value = "";
-  $("txTitle").value = "";
-  $("txType").value = "expense";
-  $("txCategory").value = "Food";
-  $("txWallet").innerHTML = walletOptions(data.wallets[0]?.id);
-  $("transactionDialog").showModal();
-}
-
-$("transactionForm").addEventListener("submit", e => {
-  e.preventDefault();
-  const amount = Number($("txAmount").value);
-  const title = $("txTitle").value.trim();
-  const walletId = $("txWallet").value;
-  if (!title || !Number.isFinite(amount) || amount <= 0 || !walletId) return notify("Check the transaction details.");
-  const wallet = data.wallets.find(w=>w.id===walletId);
-  if (!wallet) return notify("Select a valid wallet.");
-  if (wallet.frozen) return notify("This demo wallet is frozen. Unfreeze it before adding a transaction.");
-
-  data.transactions.push({
-    id: uid(), type: $("txType").value, amount, title,
-    category: $("txCategory").value, date: $("txDate").value || today(),
-    walletId
-  });
-  saveData();
-  $("transactionDialog").close();
-  renderPage();
-  notify("Transaction saved.");
-});
-
-/* ---------- Generic add/edit dialogs ---------- */
-
-function field(label, name, type="text", options={}) {
-  const required = options.required === false ? "" : "required";
-  if (type === "select") {
-    return `<div class="form-group"><label>${esc(label)}</label><select name="${esc(name)}" ${required}>${options.values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("")}</select></div>`;
-  }
-  return `<div class="form-group"><label>${esc(label)}</label><input name="${esc(name)}" type="${esc(type)}" ${required}
-    ${options.min !== undefined ? `min="${options.min}"` : ""}
-    ${options.step ? `step="${options.step}"` : ""}
-    ${options.maxlength ? `maxlength="${options.maxlength}"` : ""}
-    placeholder="${esc(options.placeholder || "")}"></div>`;
-}
-
-function openGeneric(config) {
-  genericConfig = config;
-  $("genericEyebrow").textContent = config.eyebrow || "FINOVA";
-  $("genericTitle").textContent = config.title;
-  $("genericFields").innerHTML = config.fields.map(f => field(f.label,f.name,f.type,f.options || {})).join("");
-  $("genericDialog").showModal();
-}
-
-$("genericForm").addEventListener("submit", e => {
-  e.preventDefault();
-  if (!genericConfig) return;
-  const fd = new FormData(e.currentTarget);
-  const values = Object.fromEntries(fd.entries());
-  genericConfig.save(values);
-  $("genericDialog").close();
-  genericConfig = null;
-  saveData();
-  renderPage();
-});
-
-function addWallet() {
-  openGeneric({
-    title:"Add wallet", eyebrow:"WALLETS",
-    fields:[
-      {label:"Wallet name",name:"name",options:{maxlength:45,placeholder:"e.g. Savings wallet"}},
-      {label:"Wallet type",name:"type",type:"select",options:{values:["Cash","Savings","Current","Other"]}},
-      {label:"Opening balance (₹)",name:"opening",type:"number",options:{min:0,step:"0.01"}},
-      {label:"Card colour",name:"theme",type:"select",options:{values:["card-dark","card-cyan","card-pink"]}}
-    ],
-    save:v=>{
-      data.wallets.push({id:uid(),name:v.name.trim(),type:v.type,opening:number(v.opening),frozen:false,theme:v.theme});
-      notify("Wallet added.");
-    }
-  });
-}
-
-function addBudget() {
-  openGeneric({
-    title:"Create budget",eyebrow:"BUDGET PLANNER",
-    fields:[
-      {label:"Category",name:"category",type:"select",options:{values:["Food","Transport","Shopping","Bills","Entertainment","Health","Education","Rent","Travel","Other"]}},
-      {label:"Monthly limit (₹)",name:"limit",type:"number",options:{min:0.01,step:"0.01"}}
-    ],
-    save:v=>{
-      if(data.budgets.some(b=>b.category===v.category)) { notify("A budget for this category already exists."); return; }
-      data.budgets.push({id:uid(),category:v.category,limit:number(v.limit)});
-      notify("Budget created.");
-    }
-  });
-}
-
-function addGoal() {
-  openGeneric({
-    title:"Create savings goal",eyebrow:"SAVINGS",
-    fields:[
-      {label:"Goal name",name:"name",options:{maxlength:60,placeholder:"e.g. New laptop"}},
-      {label:"Target amount (₹)",name:"target",type:"number",options:{min:0.01,step:"0.01"}},
-      {label:"Already saved (₹)",name:"saved",type:"number",options:{min:0,step:"0.01"}},
-      {label:"Emoji",name:"emoji",options:{maxlength:4,placeholder:"◎"}},
-      {label:"Target date (optional)",name:"deadline",type:"date",options:{required:false}}
-    ],
-    save:v=>{
-      data.goals.push({id:uid(),name:v.name.trim(),target:number(v.target),saved:number(v.saved),emoji:v.emoji||"◎",deadline:v.deadline});
-      notify("Savings goal created.");
-    }
-  });
-}
-
-function addLoan() {
-  openGeneric({
-    title:"Add loan",eyebrow:"LOAN TRACKER",
-    fields:[
-      {label:"Loan name",name:"name",options:{maxlength:60,placeholder:"e.g. Education loan"}},
-      {label:"Original principal (₹)",name:"principal",type:"number",options:{min:0.01,step:"0.01"}},
-      {label:"Annual interest rate (%)",name:"rate",type:"number",options:{min:0,step:"0.01"}},
-      {label:"Term in months",name:"term",type:"number",options:{min:1,step:"1"}}
-    ],
-    save:v=>{
-      data.loans.push({id:uid(),name:v.name.trim(),principal:number(v.principal),paid:0,rate:number(v.rate),term:Math.max(1,Math.floor(number(v.term)))});
-      notify("Loan added.");
-    }
-  });
-}
-
-function addRecurring() {
-  openGeneric({
-    title:"Add recurring payment",eyebrow:"RECURRING",
-    fields:[
-      {label:"Payment name",name:"name",options:{maxlength:60,placeholder:"e.g. Internet bill"}},
-      {label:"Amount (₹)",name:"amount",type:"number",options:{min:0.01,step:"0.01"}},
-      {label:"Category",name:"category",type:"select",options:{values:["Food","Transport","Shopping","Bills","Entertainment","Health","Education","Rent","Other"]}},
-      {label:"Frequency",name:"frequency",type:"select",options:{values:["Weekly","Monthly","Quarterly","Yearly"]}},
-      {label:"Next payment date",name:"nextDate",type:"date"}
-    ],
-    save:v=>{
-      data.recurring.push({id:uid(),name:v.name.trim(),amount:number(v.amount),category:v.category,frequency:v.frequency,nextDate:v.nextDate});
-      notify("Recurring item saved.");
-    }
-  });
-}
-
-/* ---------- Actions ---------- */
-
-document.addEventListener("click", e => {
-  const pageBtn = e.target.closest("[data-page]");
-  if (pageBtn) {
-    e.preventDefault();
-    setPage(pageBtn.dataset.page);
-    return;
+    if (existing) Object.assign(existing, g);
+    else state.goals.push(g);
   }
 
-  const closeBtn = e.target.closest("[data-close]");
-  if (closeBtn) {
-    $(closeBtn.dataset.close)?.close();
-    return;
+  if (type === "contribution") {
+    const g = state.goals.find(x => x.id === id);
+    if (!g || num(d.amount) <= 0) return notify("Enter a valid contribution.");
+
+    g.saved = Math.min(num(g.target), num(g.saved) + num(d.amount));
   }
 
-  const btn = e.target.closest("[data-action]");
-  if (!btn) return;
-
-  const id = btn.dataset.id;
-  const action = btn.dataset.action;
-
-  switch(action) {
-    case "add-transaction": openTransaction(); break;
-    case "add-wallet": addWallet(); break;
-    case "add-budget": addBudget(); break;
-    case "add-goal": addGoal(); break;
-    case "add-loan": addLoan(); break;
-    case "add-recurring": addRecurring(); break;
-
-    case "delete-tx":
-      if(confirm("Delete this transaction? The wallet balance will be recalculated.")) {
-        data.transactions = data.transactions.filter(t=>t.id!==id);
-        saveData(); renderPage(); notify("Transaction deleted.");
-      }
-      break;
-
-    case "toggle-wallet": {
-      const w=data.wallets.find(w=>w.id===id);
-      if(w) { w.frozen=!w.frozen; saveData(); renderPage(); notify(w.frozen?"Demo wallet frozen.":"Demo wallet unfrozen."); }
-      break;
+  if (type === "loan") {
+    if (num(d.principal) <= 0 || num(d.months) <= 0 || num(d.paid) < 0) {
+      return notify("Enter valid loan details.");
     }
 
-    case "delete-wallet":
-      if(data.transactions.some(t=>t.walletId===id)) return notify("Delete this wallet's transactions first.");
-      if(confirm("Delete this wallet?")) {
-        data.wallets=data.wallets.filter(w=>w.id!==id);
-        saveData(); renderPage(); notify("Wallet deleted.");
-      }
-      break;
-
-    case "delete-budget":
-      if(confirm("Delete this budget?")) { data.budgets=data.budgets.filter(b=>b.id!==id); saveData(); renderPage(); }
-      break;
-
-    case "delete-goal":
-      if(confirm("Delete this savings goal?")) { data.goals=data.goals.filter(g=>g.id!==id); saveData(); renderPage(); }
-      break;
-
-    case "contribute-goal": {
-      const g=data.goals.find(g=>g.id===id);
-      if(!g) break;
-      const amount=Number(prompt("How much would you like to add to this goal? (₹)"));
-      if(!Number.isFinite(amount)||amount<=0) break;
-      g.saved+=amount;
-      saveData(); renderPage(); notify("Goal progress updated.");
-      break;
+    if (num(d.paid) > num(d.principal)) {
+      return notify("Repayments cannot exceed the principal.");
     }
 
-    case "delete-loan":
-      if(confirm("Delete this loan and its recorded repayment progress?")) { data.loans=data.loans.filter(l=>l.id!==id); saveData(); renderPage(); }
-      break;
-
-    case "pay-loan": {
-      const loan=data.loans.find(l=>l.id===id);
-      if(!loan) break;
-      const remaining=Math.max(0,loan.principal-loan.paid);
-      const amount=Number(prompt(`Record a principal repayment. Remaining principal: ${money(remaining)}. Amount paid (₹):`));
-      if(!Number.isFinite(amount)||amount<=0) break;
-      if(amount>remaining) return notify("Payment cannot exceed remaining principal in this tracker.");
-      loan.paid+=amount;
-      saveData(); renderPage(); notify("Repayment recorded.");
-      break;
-    }
-
-    case "delete-recurring":
-      if(confirm("Delete this recurring item?")) { data.recurring=data.recurring.filter(r=>r.id!==id); saveData(); renderPage(); }
-      break;
-
-    case "record-recurring": {
-      const r=data.recurring.find(r=>r.id===id);
-      if(!r) break;
-      if(!data.wallets.length) return notify("Add a wallet first.");
-      if(!confirm(`Record ${money(r.amount)} for ${r.name} as an expense?`)) break;
-      const wallet=data.wallets.find(w=>w.id==="main") || data.wallets[0];
-      if(wallet.frozen) return notify("Your selected wallet is frozen.");
-      data.transactions.push({id:uid(),type:"expense",amount:r.amount,title:r.name,category:r.category,date:today(),walletId:wallet.id});
-      saveData(); renderPage(); notify("Recurring expense recorded.");
-      break;
-    }
-
-    case "pro-checkout":
-      notify("Real payments are not configured. No money has been charged.");
-      break;
-
-    case "export-csv": exportCSV(); break;
-    case "export-json": exportJSON(); break;
-    case "import-json": importJSON(); break;
-
-    case "edit-profile": {
-      openGeneric({
-        title:"Edit profile",eyebrow:"YOUR PROFILE",
-        fields:[
-          {label:"Name",name:"name",options:{maxlength:50}},
-          {label:"Age",name:"age",type:"number",options:{min:1,step:"1"}}
-        ],
-        save:v=>{
-          const age=Number(v.age);
-          if(!v.name.trim()||!Number.isInteger(age)||age<1||age>120) return notify("Enter a valid name and age.");
-          data.profile={name:v.name.trim(),age};
-          notify("Profile updated.");
-        }
-      });
-      break;
-    }
-
-    case "reset-data":
-      if(confirm("This permanently clears FINOVA's local data in this browser. Export a backup first. Continue?")) {
-        localStorage.removeItem(STORE);
-        data=defaults();
-        showOnboarding();
-        notify("Local data reset.");
-      }
-      break;
-  }
-});
-
-/* ---------- Receipt image and receipt records ---------- */
-
-document.addEventListener("change", e => {
-  if(e.target.id==="receiptFile") {
-    const file=e.target.files?.[0];
-    if(!file) return;
-    if(!file.type.startsWith("image/")) return notify("Please choose an image file.");
-    if(file.size>8*1024*1024) return notify("Choose an image smaller than 8 MB.");
-    if(receiptImageURL) URL.revokeObjectURL(receiptImageURL);
-    receiptImageURL=URL.createObjectURL(file);
-    const preview=$("receiptPreview");
-    preview.src=receiptImageURL;
-    preview.classList.remove("hidden");
-    notify("Receipt selected. Review and enter the details.");
+    state.loans.push({
+      id: uid(),
+      name: d.name.trim(),
+      principal: num(d.principal),
+      rate: num(d.rate),
+      months: Math.floor(num(d.months)),
+      paid: num(d.paid)
+    });
   }
 
-  if(e.target.id==="backupFile") {
-    const file=e.target.files?.[0];
-    if(file) notify("Backup selected. Tap Restore selected backup to continue.");
+  if (type === "repayment") {
+    const loan = state.loans.find(l => l.id === id);
+    if (!loan || num(d.amount) <= 0) return notify("Enter a valid repayment.");
+
+    loan.paid = Math.min(num(loan.principal), num(loan.paid) + num(d.amount));
   }
-});
 
-document.addEventListener("submit", e => {
-  if(e.target.id!=="receiptForm") return;
-  e.preventDefault();
+  if (type === "recurring") {
+    if (num(d.amount) <= 0) return notify("Enter an amount greater than zero.");
 
-  const name=$("receiptName").value.trim();
-  const amount=Number($("receiptAmount").value);
-  const category=$("receiptCategory").value;
-  const date=$("receiptDate").value || today();
+    state.recurring.push({
+      id: uid(),
+      title: d.title.trim(),
+      type: d.type,
+      amount: num(d.amount),
+      category: d.category,
+      accountId: d.accountId,
+      frequency: d.frequency,
+      nextDate: d.nextDate,
+      status: "scheduled"
+    });
+  }
 
-  if(!name||!Number.isFinite(amount)||amount<=0) return notify("Enter a valid receipt name and amount.");
-  if(!data.wallets.length) return notify("Add a wallet first.");
+  if (type === "transfer") {
+    const from = state.accounts.find(a => a.id === d.from);
+    const to = state.accounts.find(a => a.id === d.to);
+    const amount = num(d.amount);
 
-  const wallet=data.wallets.find(w=>w.id==="main")||data.wallets[0];
-  if(wallet.frozen) return notify("Unfreeze your demo wallet before saving an expense.");
+    if (!from || !to || from.id === to.id || amount <= 0) {
+      return notify("Choose two different accounts and a valid amount.");
+    }
 
-  const receipt={id:uid(),name,amount,category,date};
-  data.receipts.push(receipt);
-  data.transactions.push({id:uid(),type:"expense",amount,title:name,category,date,walletId:wallet.id});
-  saveData();
-  renderPage();
-  notify("Receipt saved and expense recorded.");
-});
+    if (num(from.balance) < amount) {
+      return notify("The source account does not have enough recorded balance.");
+    }
 
-/* ---------- Export and restore ---------- */
+    from.balance = Math.round((num(from.balance) - amount) * 100) / 100;
+    to.balance = Math.round((num(to.balance) + amount) * 100) / 100;
+  }
 
-function downloadFile(filename, content, type) {
-  const blob=new Blob([content],{type});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;
-  a.download=filename;
+  save();
+  closeModal();
+  renderApp();
+  notify("Saved successfully.");
+}
+
+function deleteById(listName, id, message) {
+  const list = state[listName];
+  if (!Array.isArray(list)) return;
+  if (!confirm(message || "Delete this item?")) return;
+
+  if (listName === "transactions") {
+    const t = list.find(x => x.id === id);
+    reverseTransaction(t);
+  }
+
+  state[listName] = list.filter(x => x.id !== id);
+  save();
+  renderApp();
+  notify("Item removed.");
+}
+
+function downloadBlob(name, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+
+  a.href = url;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
 
-function exportJSON() {
-  downloadFile(`finova-backup-${today()}.json`,JSON.stringify(data,null,2),"application/json");
-  notify("Backup export started.");
-}
-
-function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g,'""')}"`;
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function exportCSV() {
-  const header=["Date","Type","Description","Category","Amount INR","Wallet"];
-  const rows=data.transactions.map(t=>[
-    t.date,t.type,t.title,t.category,t.amount,
-    data.wallets.find(w=>w.id===t.walletId)?.name || "Wallet removed"
+  const headers = ["Date", "Title", "Type", "Category", "Account", "Amount"];
+  const rows = state.transactions.map(t => [
+    t.date, t.title, t.type, t.category, accountName(t.accountId), t.amount
   ]);
-  const csv=[header,...rows].map(row=>row.map(csvCell).join(",")).join("\r\n");
-  downloadFile(`finova-transactions-${today()}.csv`,"\uFEFF"+csv,"text/csv;charset=utf-8");
-  notify("CSV export started.");
+
+  const csv = [headers, ...rows]
+    .map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))
+    .join("\r\n");
+
+  downloadBlob("finova-transactions.csv", "\uFEFF" + csv, "text/csv;charset=utf-8");
+  notify("CSV export created.");
 }
 
-function importJSON() {
-  const file=$("backupFile").files?.[0];
-  if(!file) return notify("Choose a backup JSON file first.");
-  if(!confirm("Restore this backup? It will replace the data currently saved in this browser.")) return;
+function exportBackup() {
+  downloadBlob("finova-backup.json", JSON.stringify(state, null, 2), "application/json");
+  notify("Backup created. Keep it private.");
+}
 
-  const reader=new FileReader();
-  reader.onload=()=>{
+function doImportBackup() {
+  let input = document.getElementById("backup-file");
+
+  if (!input) {
+    input = document.createElement("input");
+    input.type = "file";
+    input.id = "backup-file";
+    input.accept = ".json,application/json";
+    input.hidden = true;
+    document.body.appendChild(input);
+  }
+
+  input.click();
+}
+
+function handleImportFile(file) {
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
     try {
-      const parsed=JSON.parse(reader.result);
-      const arrays=["transactions","wallets","budgets","goals","loans","recurring","receipts"];
-      if(!parsed||typeof parsed!=="object"||!arrays.every(k=>Array.isArray(parsed[k]))) throw new Error("Invalid backup");
-      if(!parsed.profile||typeof parsed.profile.name!=="string") throw new Error("Missing profile");
-      const base=defaults();
-      data={...base,...parsed};
-      saveData();
-      showApp();
-      setPage("reports");
+      const parsed = JSON.parse(reader.result);
+      const required = ["accounts", "transactions", "budgets", "goals", "loans", "recurring"];
+
+      if (!parsed || typeof parsed !== "object" || !required.every(k => Array.isArray(parsed[k]))) {
+        throw new Error("Invalid backup format");
+      }
+
+      if (!confirm("Restore this backup? It will replace the data currently stored in this browser.")) return;
+
+      state = { ...freshState(), ...parsed };
+
+      if (!state.accounts.length) state.accounts = freshState().accounts;
+      if (!state.membership) state.membership = freshState().membership;
+      if (!state.settings) state.settings = freshState().settings;
+
+      save();
+      currentPage = "dashboard";
+      renderApp();
       notify("Backup restored.");
     } catch {
-      notify("This file is not a valid FINOVA backup.");
+      notify("That file is not a valid FINOVA backup.");
     }
   };
-  reader.onerror=()=>notify("Could not read the selected file.");
+
   reader.readAsText(file);
 }
 
-/* ---------- Start ---------- */
+/* FIXED: receive the click event explicitly and use data-tier for plans. */
+function handleAction(actionEl, event) {
+  const action = actionEl.dataset.action;
+  const id = actionEl.dataset.id;
 
-function init() {
-  $("txDate").value=today();
-  $("receiptDate").value=today();
+  if (!action) return;
 
-  if(data.profile && data.policyAccepted) showApp();
-  else showOnboarding();
+  switch (action) {
+    case "toggle-menu":
+      menuOpen = true;
+      renderApp();
+      break;
+
+    case "close-menu":
+      menuOpen = false;
+      renderApp();
+      break;
+
+    case "close-modal":
+      closeModal();
+      break;
+
+    case "modal-backdrop":
+      if (event && event.target === actionEl) closeModal();
+      break;
+
+    case "add-transaction":
+      openForm("transaction");
+      break;
+
+    case "edit-transaction":
+      openForm("transaction", id);
+      break;
+
+    case "delete-transaction":
+      deleteById("transactions", id, "Delete this transaction? Its account balance will be adjusted.");
+      break;
+
+    case "add-account":
+      openForm("account");
+      break;
+
+    case "edit-account":
+      openForm("account", id);
+      break;
+
+    case "transfer":
+      openForm("transfer", id);
+      break;
+
+    case "add-budget":
+      openForm("budget");
+      break;
+
+    case "delete-budget":
+      deleteById("budgets", id, "Remove this budget?");
+      break;
+
+    case "add-goal":
+      openForm("goal");
+      break;
+
+    case "edit-goal":
+      openForm("goal", id);
+      break;
+
+    case "contribute-goal":
+      openForm("contribution", id);
+      break;
+
+    case "delete-goal":
+      deleteById("goals", id, "Delete this savings goal?");
+      break;
+
+    case "add-loan":
+      openForm("loan");
+      break;
+
+    case "repay-loan":
+      openForm("repayment", id);
+      break;
+
+    case "delete-loan":
+      deleteById("loans", id, "Delete this loan tracker?");
+      break;
+
+    case "add-recurring":
+      openForm("recurring");
+      break;
+
+    case "delete-recurring":
+      deleteById("recurring", id, "Delete this recurring schedule?");
+      break;
+
+    case "toggle-recurring": {
+      const r = state.recurring.find(x => x.id === id);
+      if (r) r.status = r.status === "paused" ? "scheduled" : "paused";
+      save();
+      renderApp();
+      break;
+    }
+
+    case "record-recurring":
+      recordRecurring(id);
+      break;
+
+    case "toggle-balance":
+      state.balanceHidden = !state.balanceHidden;
+      save();
+      renderApp();
+      break;
+
+    /* FIXED: create the receipt input if it does not exist yet. */
+    case "choose-receipt": {
+      let input = document.getElementById("receipt-file");
+
+      if (!input) {
+        input = document.createElement("input");
+        input.type = "file";
+        input.id = "receipt-file";
+        input.accept = "image/*";
+        input.hidden = true;
+        document.body.appendChild(input);
+      }
+
+      input.click();
+      break;
+    }
+
+    case "export-csv":
+      exportCSV();
+      break;
+
+    case "export-backup":
+      exportBackup();
+      break;
+
+    case "import-backup":
+      doImportBackup();
+      break;
+
+    case "clear-data":
+      if (confirm("Delete all FINOVA data saved in this browser? Export a backup first if you may need it.")) {
+        localStorage.removeItem(APP_KEY);
+        state = freshState();
+        currentPage = "dashboard";
+        scannerImage = "";
+        renderApp();
+        notify("Local app data deleted.");
+      }
+      break;
+
+    case "subscribe": {
+      /* FIXED: the selected tier is stored in data-tier, not data-id. */
+      const tier = actionEl.dataset.tier;
+      const selectedPlan = tier === "gold-yearly"
+        ? "FINOVA Gold — ₹1,169/year"
+        : "FINOVA Platinum — ₹99/month";
+
+      showModal(
+        "Connect subscription billing",
+        `<p class="muted">Selected plan: <strong>${selectedPlan}</strong>.</p>
+        <p>This website preview does not collect payment details or activate paid access. Before launch, connect a payment provider, verify the transaction securely, and handle renewals, cancellations and expiry.</p>
+        <div class="form-actions">
+          <button class="primary-btn" data-action="close-modal">Understood</button>
+        </div>`
+      );
+      break;
+    }
+  }
 }
 
-init();
+function recordRecurring(id) {
+  const r = state.recurring.find(x => x.id === id);
+
+  if (!r || r.status === "paused") {
+    return notify("Resume this schedule before recording it.");
+  }
+
+  const t = {
+    id: uid(),
+    title: r.title,
+    type: r.type,
+    amount: num(r.amount),
+    category: r.category,
+    accountId: r.accountId,
+    date: today()
+  };
+
+  if (!state.accounts.some(a => a.id === t.accountId)) {
+    return notify("Choose a valid account for this schedule.");
+  }
+
+  state.transactions.push(t);
+  applyTransaction(t);
+
+  const date = new Date((r.nextDate || today()) + "T12:00:00");
+
+  if (r.frequency === "Weekly") date.setDate(date.getDate() + 7);
+  else if (r.frequency === "Yearly") date.setFullYear(date.getFullYear() + 1);
+  else date.setMonth(date.getMonth() + 1);
+
+  r.nextDate = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
+
+  save();
+  renderApp();
+  notify("Payment recorded and next due date updated.");
+}
+
+function handleSearchFilters() {
+  const search = (document.getElementById("transaction-search")?.value || "").toLowerCase();
+  const type = document.getElementById("transaction-type-filter")?.value || "all";
+  const month = document.getElementById("transaction-month-filter")?.value || "";
+
+  const filtered = [...state.transactions]
+    .filter(t => (!search || `${t.title} ${t.category} ${accountName(t.accountId)}`.toLowerCase().includes(search)))
+    .filter(t => type === "all" || t.type === type)
+    .filter(t => !month || monthKey(t.date) === month)
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const results = document.getElementById("transaction-results");
+  if (results) results.innerHTML = transactionRows(filtered);
+}
+
+function handleFormSubmit(form) {
+  const id = form.id;
+  const d = formObject(form);
+
+  if (id === "onboarding-form") {
+    const name = String(d.name || "").trim();
+    if (!name) return notify("Enter your name to continue.");
+
+    state.profile = {
+      name,
+      age: d.age ? num(d.age) : "",
+      createdAt: new Date().toISOString()
+    };
+
+    state.currency = d.currency || "INR";
+    state.onboardingDone = true;
+
+    save();
+    currentPage = "dashboard";
+    renderApp();
+    notify("Welcome to FINOVA.");
+    return;
+  }
+
+  if (id === "profile-form") {
+    if (!String(d.name || "").trim()) return notify("Name cannot be empty.");
+
+    state.profile = {
+      ...(state.profile || {}),
+      name: String(d.name).trim(),
+      age: d.age ? num(d.age) : ""
+    };
+
+    state.currency = d.currency || "INR";
+    save();
+    renderApp();
+    notify("Profile updated.");
+    return;
+  }
+
+  if (id === "modal-form") {
+    submitModal(form, form.dataset.form);
+    return;
+  }
+
+  if (id === "receipt-form") {
+    const amount = num(d.amount);
+    if (amount <= 0) return notify("Enter a valid receipt total.");
+
+    const t = {
+      id: uid(),
+      title: String(d.title).trim(),
+      type: "expense",
+      amount,
+      category: d.category,
+      accountId: d.accountId,
+      date: d.date
+    };
+
+    if (!state.accounts.some(a => a.id === t.accountId)) {
+      return notify("Choose a valid account.");
+    }
+
+    state.transactions.push(t);
+    applyTransaction(t);
+    save();
+    scannerImage = "";
+    renderApp();
+    notify("Receipt expense saved.");
+  }
+}
+
+/* Click delegation: pass the event to fix modal backdrop handling. */
+document.addEventListener("click", e => {
+  const pageButton = e.target.closest("[data-page]");
+
+  if (pageButton) {
+    goTo(pageButton.dataset.page);
+    return;
+  }
+
+  const actionEl = e.target.closest("[data-action]");
+  if (actionEl) handleAction(actionEl, e);
+});
+
+document.addEventListener("submit", e => {
+  const form = e.target.closest("form");
+  if (!form) return;
+
+  e.preventDefault();
+  handleFormSubmit(form);
+});
+
+document.addEventListener("input", e => {
+  if (["transaction-search", "transaction-month-filter"].includes(e.target.id)) {
+    handleSearchFilters();
+  }
+
+  if (e.target.id.startsWith("emi-")) updateEMI();
+});
+
+document.addEventListener("change", e => {
+  if (e.target.id === "transaction-type-filter") {
+    handleSearchFilters();
+  }
+
+  if (e.target.id === "theme-toggle") {
+    state.theme = e.target.checked ? "light" : "dark";
+    save();
+    renderApp();
+  }
+
+  if (e.target.id === "balance-toggle") {
+    state.balanceHidden = e.target.checked;
+    save();
+    renderApp();
+  }
+
+  if (e.target.id === "receipt-file" && e.target.files?.[0]) {
+    const file = e.target.files[0];
+
+    if (!file.type.startsWith("image/")) {
+      return notify("Please choose an image file.");
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      return notify("Choose an image smaller than 8 MB.");
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      scannerImage = reader.result;
+
+      if (currentPage !== "scanner") goTo("scanner");
+      else renderApp();
+
+      notify("Receipt image loaded. Enter the details to save.");
+    };
+
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  if (e.target.id === "backup-file" && e.target.files?.[0]) {
+    handleImportFile(e.target.files[0]);
+    e.target.value = "";
+  }
+});
+
+function updateEMI() {
+  const principal = document.getElementById("emi-principal");
+  const rate = document.getElementById("emi-rate");
+  const months = document.getElementById("emi-months");
+  const result = document.getElementById("emi-result");
+
+  if (!principal || !rate || !months || !result) return;
+
+  result.textContent = num(principal.value) > 0 && num(months.value) > 0
+    ? money(calculateEMI(principal.value, rate.value, months.value))
+    : "—";
+}
+
+window.addEventListener("storage", e => {
+  if (e.key === APP_KEY) {
+    state = loadState();
+    renderApp();
+  }
+});
+
+renderApp();
 
