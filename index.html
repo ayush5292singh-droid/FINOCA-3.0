@@ -4,176 +4,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#080b18">
-  <title>FINOVA — Smart Money OS</title>
+  <meta name="theme-color" content="#080d18">
+  <meta name="description" content="FINOVA — your personal money management space.">
+  <title>FINOVA — Smart Money</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <script src="script.js" defer></script>
 </head>
 <body>
-  <div id="toast" class="toast"></div>
-
-  <!-- ONBOARDING -->
-  <main id="onboarding" class="onboarding">
-    <div class="welcome-brand">
-      <div class="brand-mark">F<span>✦</span></div>
-      <div>
-        <h1>FINOVA</h1>
-        <p>YOUR MONEY. YOUR CONTROL.</p>
-      </div>
+  <div id="app">
+    <div class="boot-screen">
+      <div class="brand-mark">F</div>
+      <h1>FINOVA</h1>
+      <p>Your money. Your future.</p>
     </div>
-
-    <section id="welcomeStep" class="welcome-card">
-      <div class="orb orb-one"></div>
-      <div class="orb orb-two"></div>
-      <span class="eyebrow">WELCOME TO YOUR MONEY OS</span>
-      <h2>Money management,<br><span class="gradient-text">reimagined.</span></h2>
-      <p class="muted">One beautiful place to manage spending, track goals and understand your money.</p>
-
-      <div class="form-group">
-        <label for="profileName">What should we call you?</label>
-        <input id="profileName" maxlength="50" placeholder="Enter your name" autocomplete="given-name">
-      </div>
-      <div class="form-group">
-        <label for="profileAge">Your age</label>
-        <input id="profileAge" type="number" min="1" max="120" placeholder="Enter your age">
-      </div>
-      <button class="btn btn-primary full" id="welcomeContinue">Continue <span>→</span></button>
-      <p class="tiny muted">Your profile is stored on this device.</p>
-    </section>
-
-    <section id="policyStep" class="welcome-card hidden">
-      <span class="eyebrow">BEFORE WE BEGIN</span>
-      <h2>Your money space.<br><span class="gradient-text">Your rules.</span></h2>
-      <p class="muted">A few things to know before entering FINOVA.</p>
-
-      <div class="policy-item">
-        <span class="policy-icon">◈</span>
-        <div><strong>About FINOVA</strong><p>A personal finance tracker for transactions, budgets, goals and loans.</p></div>
-      </div>
-      <div class="policy-item">
-        <span class="policy-icon">⌑</span>
-        <div><strong>Privacy</strong><p>This demo stores finance records in your browser on this device. It does not provide cloud backup.</p></div>
-      </div>
-      <div class="policy-item">
-        <span class="policy-icon">ⓘ</span>
-        <div><strong>Important information</strong><p>Figures are based on information you enter. FINOVA is not a bank or a financial adviser.</p></div>
-      </div>
-      <label class="consent">
-        <input type="checkbox" id="policyConsent">
-        <span>I have read the information above and agree to continue.</span>
-      </label>
-      <button class="btn btn-primary full" id="enterApp">Enter FINOVA <span>→</span></button>
-      <button class="btn btn-ghost full" id="backWelcome">Go back</button>
-    </section>
-    <p class="footer-note">FINOVA © 2026 · SMART MONEY OS</p>
-  </main>
-
-  <!-- MAIN APP -->
-  <div id="app" class="app-shell hidden">
-    <aside class="sidebar">
-      <a class="brand-link" href="#" data-page="dashboard">
-        <div class="brand-mark">F<span>✦</span></div>
-        <div><strong>FINOVA</strong><small>SMART MONEY OS</small></div>
-      </a>
-
-      <div class="side-label">WORKSPACE</div>
-      <nav id="sideNav" class="side-nav">
-        <button class="nav-item active" data-page="dashboard"><span>◫</span> Dashboard</button>
-        <button class="nav-item" data-page="transactions"><span>⇄</span> Transactions</button>
-        <button class="nav-item" data-page="wallets"><span>▣</span> Wallets & Cards</button>
-        <button class="nav-item" data-page="budgets"><span>◉</span> Budgets</button>
-        <button class="nav-item" data-page="goals"><span>◎</span> Savings Goals</button>
-        <button class="nav-item" data-page="loans"><span>↗</span> Loans & EMI</button>
-        <button class="nav-item" data-page="recurring"><span>⟳</span> Recurring</button>
-        <button class="nav-item" data-page="receipts"><span>▤</span> Receipt Scanner</button>
-        <button class="nav-item" data-page="analytics"><span>⌁</span> Analytics</button>
-        <button class="nav-item" data-page="reports"><span>▧</span> Reports & Export</button>
-      </nav>
-
-      <div class="sidebar-bottom">
-        <div class="pro-mini">
-          <div class="pro-mini-icon">✦</div>
-          <strong>Go beyond basic.</strong>
-          <p>Explore FINOVA Pro tools.</p>
-          <button class="btn btn-pro full" data-page="pro">Explore Pro ↗</button>
-        </div>
-        <button class="nav-item" data-page="settings"><span>⚙</span> Settings</button>
-        <div class="profile-mini">
-          <div class="avatar" id="sidebarAvatar">F</div>
-          <div class="profile-info"><strong id="sidebarName">Your profile</strong><small id="planLabel">FREE PLAN</small></div>
-          <button class="icon-btn" id="logoutBtn" title="Return to welcome screen">↪</button>
-        </div>
-      </div>
-    </aside>
-
-    <main class="main-content">
-      <header class="topbar">
-        <div>
-          <div class="breadcrumb">FINOVA <span>/</span> <span id="currentSection">Dashboard</span></div>
-          <h1 id="pageHeading">Your financial universe.</h1>
-        </div>
-        <div class="top-actions">
-          <span class="secure-pill"><span class="live-dot"></span> LOCAL MODE</span>
-          <button class="icon-btn" data-page="settings" title="Settings">⚙</button>
-          <div class="avatar" id="topAvatar">F</div>
-        </div>
-      </header>
-
-      <div id="pageContent" class="page-content"></div>
-
-      <footer class="app-footer">
-        <span>FINOVA · SMART MONEY OS</span>
-        <span>Track thoughtfully. Spend mindfully.</span>
-      </footer>
-    </main>
-
-    <nav class="mobile-nav" id="mobileNav">
-      <button class="mobile-nav-item active" data-page="dashboard"><span>◫</span>Home</button>
-      <button class="mobile-nav-item" data-page="transactions"><span>⇄</span>Activity</button>
-      <button class="mobile-nav-item" data-page="wallets"><span>▣</span>Wallets</button>
-      <button class="mobile-nav-item" data-page="analytics"><span>⌁</span>Insights</button>
-      <button class="mobile-nav-item" data-page="pro"><span>✦</span>Pro</button>
-    </nav>
   </div>
-
-  <!-- Reusable transaction dialog -->
-  <dialog id="transactionDialog" class="modal">
-    <form id="transactionForm" class="modal-card">
-      <div class="modal-heading">
-        <div><span class="eyebrow">MONEY MOVEMENT</span><h2>New transaction</h2></div>
-        <button type="button" class="icon-btn" data-close="transactionDialog">✕</button>
-      </div>
-      <div class="form-group">
-        <label>Transaction type</label>
-        <select id="txType"><option value="expense">Expense</option><option value="income">Income</option></select>
-      </div>
-      <div class="form-group"><label>Amount (₹)</label><input id="txAmount" type="number" min="0.01" step="0.01" required placeholder="0.00"></div>
-      <div class="form-group"><label>Description</label><input id="txTitle" maxlength="100" required placeholder="e.g. Groceries"></div>
-      <div class="form-row">
-        <div class="form-group"><label>Category</label>
-          <select id="txCategory">
-            <option>Food</option><option>Transport</option><option>Shopping</option>
-            <option>Bills</option><option>Entertainment</option><option>Health</option>
-            <option>Education</option><option>Rent</option><option>Salary</option>
-            <option>Investment</option><option>Travel</option><option>Other</option>
-          </select>
-        </div>
-        <div class="form-group"><label>Date</label><input id="txDate" type="date" required></div>
-      </div>
-      <div class="form-group"><label>Wallet</label><select id="txWallet"></select></div>
-      <button class="btn btn-primary full" type="submit">Save transaction</button>
-    </form>
-  </dialog>
-
-  <dialog id="genericDialog" class="modal">
-    <form id="genericForm" class="modal-card">
-      <div class="modal-heading">
-        <div><span class="eyebrow" id="genericEyebrow">FINOVA</span><h2 id="genericTitle">Add item</h2></div>
-        <button type="button" class="icon-btn" data-close="genericDialog">✕</button>
-      </div>
-      <div id="genericFields"></div>
-      <button class="btn btn-primary full" type="submit">Save</button>
-    </form>
-  </dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <input type="file" id="receipt-file" accept="image/*" hidden>
+  <script src="script.js"></script>
 </body>
 </html>
